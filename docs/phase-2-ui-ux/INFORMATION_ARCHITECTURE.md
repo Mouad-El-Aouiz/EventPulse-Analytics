@@ -161,7 +161,7 @@ La navigation est **calculée à partir de la matrice Annexe A**, pas d'une list
 | Analytics revenus | Oui | Oui | Oui (assignés) | Oui (agrégats) | Oui (lecture seule) |
 | Analytics audience | Oui | Oui | Oui | Oui (agrégats) | Oui (lecture) |
 | Analytics exposants | Oui | Oui | Oui | Oui | Oui (lecture) |
-| Analytics avancées (Should) | Oui | Oui | Non | Oui | Non |
+| Analytics avancées (Should) | Oui | Non | Non | Oui | Non |
 | Rapports & exports | Oui | Oui | Oui (pseudonymisé) | Oui (pseudonymisé) | Non |
 | Membres & rôles | Oui | Oui (hors OWNER) | Non | Non | Non |
 | Paramètres organisation | Oui | Restreint | Non | Non | Non |
@@ -171,7 +171,7 @@ La navigation est **calculée à partir de la matrice Annexe A**, pas d'une list
 
 **OWNER** — accès complet, y compris attribution du rôle OWNER, paramètres critiques, exports non pseudonymisés, audit. Le dernier OWNER est protégé.
 
-**ADMIN** — accès complet sauf : attribuer ou modifier un OWNER, rétrograder un OWNER, certaines actions critiques des paramètres. Exports non pseudonymisés.
+**ADMIN** — accès complet sauf : attribuer ou modifier un OWNER, rétrograder un OWNER, certaines actions critiques des paramètres. Exports non pseudonymisés. Analytics avancées non accessibles (décision D-06 du 2026-11-18).
 
 **EVENT_MANAGER** — navigation opérationnelle limitée aux événements assignés ; création d'événement avec auto-assignation ; analytics sur son périmètre ; rapports et exports pseudonymisés ; aucune administration.
 
@@ -272,10 +272,10 @@ Réservé OWNER (complet) et ADMIN (restreint) :
 ### 10.1 VIEWER et Revenue Analytics — résolu
 
 - La **matrice Annexe A.9** autorise génériquement « Voir les dashboards » à VIEWER.
-- Le **module 9 (PRD §12.3)** et **US-REV-01** ne listent pas VIEWER parmi les rôles de Revenue Analytics.
+- Le **module 9 (PRD §12.3)** et **US-REV-01** listent désormais VIEWER en lecture seule, à la suite de la correction documentaire du 2026-11-18.
 - **Arbitrage du Product Owner (2026-11-18) :** VIEWER peut consulter les dashboards, **y compris Revenue Analytics**, uniquement en **lecture seule**, sans PII, sans export et sans administration.
 - **Traduction dans l'interface :** entrée de navigation visible ; KPI et graphiques agrégés affichés ; filtres basiques ; aucun drill-down détaillé ; aucune action d'export ; aucune colonne nominative.
-- Les documents Phase 1 ne sont pas modifiés dans le cadre de la Phase 2 ; la précision devra être reportée dans une révision ultérieure de la Phase 1.
+- Les documents Phase 1 ont été alignés lors de la clôture de la Phase 3, le 2026-11-18.
 
 ### 10.2 EVENT_MANAGER et Revenue Analytics
 
@@ -284,7 +284,7 @@ Réservé OWNER (complet) et ADMIN (restreint) :
 
 ### 10.3 Analytics avancées
 
-- Module Should. L'entrée de navigation est présente mais marquée optionnelle ; aucune autre partie de l'interface n'en dépend.
+- Module Should. L'entrée de navigation est présente mais marquée optionnelle ; elle n'est visible que pour OWNER et ANALYST (décision D-06 du 2026-11-18). Aucune autre partie de l'interface n'en dépend.
 - Si le module n'est pas livré, l'entrée est simplement absente sans impact sur les autres écrans.
 
 ### 10.4 Temps réel

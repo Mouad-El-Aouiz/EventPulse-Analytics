@@ -717,7 +717,7 @@
 ## EPIC REV — Revenue Analytics
 
 ### US-REV-01 — Analyser les revenus
-- **Rôle :** OWNER, ADMIN, EVENT_MANAGER assigné, ANALYST (agrégats).
+- **Rôle :** OWNER, ADMIN, EVENT_MANAGER assigné, ANALYST (agrégats), VIEWER (lecture seule, agrégats).
 - **Objectif :** distinguer billets, stands, brut, remboursements et net.
 - **Scénario principal :**
   1. L'utilisateur filtre par période, événement et type.
@@ -731,6 +731,7 @@
   - Given un remboursement, Then Gross reste stable et Net diminue.
   - Given une période avec remboursements supérieurs aux paiements, Then Net peut être négatif.
   - Given un ANALYST, Then aucun détail PII n'est accessible.
+  - Given un VIEWER, Then les agrégats sont visibles sans PII, sans export et sans administration.
 - **Priorité :** Must. **Règles :** Q-04, Q-05, BR-PAY-001 à BR-PAY-009. **KPI :** KPI-REV-001 à 008.
 
 ---
@@ -778,7 +779,7 @@
 ## EPIC ADV — Advanced Analytics
 
 ### US-ADV-01 — Explorer les données avec des filtres avancés
-- **Rôle :** ANALYST, OWNER, ADMIN.
+- **Rôle :** ANALYST, OWNER.
 - **Objectif :** croiser plusieurs dimensions avec drill-down contrôlé.
 - **Scénario principal :**
   1. L'utilisateur combine période, événement, type, statut, source et segment.

@@ -490,7 +490,7 @@ Le produit est organisé en **15 modules** répartis en quatre domaines.
 
 **Objectif :** lecture financière rigoureuse, séparant billets et stands.
 
-**Utilisateurs :** OWNER, ADMIN, EVENT_MANAGER, ANALYST (agrégats).
+**Utilisateurs :** OWNER, ADMIN, EVENT_MANAGER, ANALYST (agrégats) ; VIEWER en lecture seule (agrégats, sans PII ni export).
 
 **Fonctionnalités :**
 
@@ -578,7 +578,7 @@ Le produit est organisé en **15 modules** répartis en quatre domaines.
 
 **Objectif :** exploration analytique avancée sur agrégats.
 
-**Utilisateurs :** ANALYST, OWNER, ADMIN.
+**Utilisateurs :** ANALYST, OWNER.
 
 **Fonctionnalités :** filtres multi-dimensions, comparaisons de périodes de longueur égale, analyses croisées contrôlées, drill-down permission-aware, segmentation personnalisée, plages de dates libres.
 
@@ -1116,7 +1116,7 @@ Les décisions Q-01 à Q-14 sont rappelées en **Annexe E**.
 | Voir les dashboards | Oui | Oui | Oui | Oui | Oui |
 | Filtrer et comparer | Oui | Oui | Oui | Oui | Restreint (basique) |
 | Drill-down détaillé | Oui | Oui | Restreint (assignés) | Restreint (agrégats) | Non |
-| Advanced Analytics | Oui | Oui | Non | Oui | Non |
+| Advanced Analytics | Oui | Non | Non | Oui | Non |
 | Exporter | Oui | Oui | Restreint (pseudonymisé) | Restreint (pseudonymisé) | Non |
 
 #### A.10 Rapports et exports

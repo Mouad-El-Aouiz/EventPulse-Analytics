@@ -128,7 +128,7 @@
 
 | # | Point | Sources | Traitement UI | Statut |
 |---|---|---|---|---|
-| C-01 | VIEWER et Revenue Analytics | Annexe A.9 « Voir les dashboards : Oui » pour VIEWER ; PRD §12.3 et US-REV-01 excluent VIEWER | Visible en lecture seule : agrégats uniquement, sans PII, sans export, sans administration, filtres basiques, pas de drill-down détaillé | **Résolu — arbitrage PO du 2026-11-18** |
+| C-01 | VIEWER et Revenue Analytics | Annexe A.9 « Voir les dashboards : Oui » pour VIEWER ; PRD §12.3 et US-REV-01 excluaient VIEWER, corrigés le 2026-11-18 | Visible en lecture seule : agrégats uniquement, sans PII, sans export, sans administration, filtres basiques, pas de drill-down détaillé | **Résolu — arbitrage PO du 2026-11-18, documents Phase 1 alignés en clôture Phase 3** |
 | C-02 | EVENT_MANAGER et Revenue Analytics | PRD §12.3 « EVENT_MANAGER » ; US-REV-01 « assigné » | Restreint aux événements assignés | Interprété, cohérent avec le périmètre global EM |
 | C-03 | Paramètres critiques ADMIN | Annexe A.1 « Modifier les paramètres critiques : Restreint » sans énumération | Champs sensibles désactivés ; liste exacte à préciser en Phase 3 | Non bloquant |
 | C-04 | Historique des exports | Interface Should, suivi backend Must | Onglet historique conditionnel ; backend reste source de vérité | Non bloquant |

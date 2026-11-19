@@ -2,5 +2,10 @@
   "name": "@eventpulse/api",
   "version": "0.1.0",
   "private": true,
-  "description": "EventPulse Analytics backend API"
+  "description": "EventPulse Analytics backend API",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json"
+  }
 }

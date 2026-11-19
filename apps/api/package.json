@@ -1,0 +1,6 @@
+{
+  "name": "@eventpulse/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EventPulse Analytics backend API"
+}

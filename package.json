@@ -1,0 +1,12 @@
+{
+  "name": "eventpulse-analytics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EventPulse Analytics — B2B event management and analytics platform",
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22 <23"
+  }
+}

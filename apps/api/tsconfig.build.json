@@ -7,6 +7,7 @@
     "sourceMap": true,
     "noEmitOnError": true
   },
+  "include": ["src/**/*.ts"],
   "exclude": [
     "src/**/*.test.ts",
     "src/**/*.spec.ts",

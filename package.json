@@ -2,8 +2,13 @@
   "name": "eventpulse-analytics",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "EventPulse Analytics — B2B event management and analytics platform",
   "scripts": {
+    "lint": "npm run lint --workspace @eventpulse/api",
+    "lint:fix": "npm run lint:fix --workspace @eventpulse/api",
+    "format": "npm run format --workspace @eventpulse/api",
+    "format:check": "npm run format:check --workspace @eventpulse/api",
     "typecheck": "npm run typecheck --workspace @eventpulse/api",
     "build": "npm run build --workspace @eventpulse/api"
   },
@@ -14,7 +19,13 @@
     "node": ">=22 <23"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.5",
-    "typescript": "^5.9.3"
+    "eslint": "^10.15.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.73.0"
   }
 }

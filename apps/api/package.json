@@ -5,11 +5,20 @@
   "description": "EventPulse Analytics backend API",
   "type": "module",
   "scripts": {
-    "lint": "eslint \"src/**/*.ts\"",
-    "lint:fix": "eslint \"src/**/*.ts\" --fix",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\"",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@types/supertest": "^7.2.1",
+    "@vitest/coverage-v8": "^5.1.1",
+    "supertest": "^7.3.2",
+    "vitest": "^5.1.1"
   }
 }

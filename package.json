@@ -10,7 +10,10 @@
     "format": "npm run format --workspace @eventpulse/api",
     "format:check": "npm run format:check --workspace @eventpulse/api",
     "typecheck": "npm run typecheck --workspace @eventpulse/api",
-    "build": "npm run build --workspace @eventpulse/api"
+    "build": "npm run build --workspace @eventpulse/api",
+    "test": "npm run test --workspace @eventpulse/api",
+    "test:watch": "npm run test:watch --workspace @eventpulse/api",
+    "test:coverage": "npm run test:coverage --workspace @eventpulse/api"
   },
   "workspaces": [
     "apps/*"

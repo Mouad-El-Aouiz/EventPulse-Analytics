@@ -1,5 +1,6 @@
 import { STATUS_CODES } from 'node:http';
 import { AppError } from './app-error.js';
+import { ValidationError, type ValidationIssue } from './validation-error.js';
 
 export const PROBLEM_DETAILS_MEDIA_TYPE = 'application/problem+json';
 export const DEFAULT_PROBLEM_TYPE = 'about:blank';
@@ -15,6 +16,7 @@ export interface ProblemDetails {
   instance?: string;
   code: string;
   requestId?: string;
+  errors?: ValidationIssue[];
 }
 
 export interface ProblemDetailsContext {
@@ -38,6 +40,11 @@ export function mapAppErrorToProblemDetails(
     ...(context.instance !== undefined ? { instance: context.instance } : {}),
     code: error.code,
     ...(context.requestId !== undefined ? { requestId: context.requestId } : {}),
+    ...(error instanceof ValidationError
+      ? {
+          errors: error.issues.map(({ path, code, message }) => ({ path, code, message })),
+        }
+      : {}),
   };
 }
 

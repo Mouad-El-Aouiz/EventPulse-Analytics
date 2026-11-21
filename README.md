@@ -127,10 +127,12 @@ EventPulse-Analytics/
 │       │   │   └── logger.ts
 │       │   ├── errors/
 │       │   │   ├── app-error.ts
-│       │   │   └── problem-details.ts
+│       │   │   ├── problem-details.ts
+│       │   │   └── validation-error.ts
 │       │   ├── middleware/
 │       │   │   ├── error-handler.ts
-│       │   │   └── request-logger.ts
+│       │   │   ├── request-logger.ts
+│       │   │   └── validate-request.ts
 │       │   └── routes/
 │       │       ├── index.ts
 │       │       ├── health.routes.ts
@@ -142,7 +144,8 @@ EventPulse-Analytics/
 │       │   │   ├── request-logger.test.ts
 │       │   │   ├── routes.test.ts
 │       │   │   ├── server.test.ts
-│       │   │   └── supertest.test.ts
+│       │   │   ├── supertest.test.ts
+│       │   │   └── validation.test.ts
 │       │   └── unit/
 │       │       ├── env-loader.test.ts
 │       │       ├── env.test.ts
@@ -151,7 +154,8 @@ EventPulse-Analytics/
 │       │       ├── server-import.test.ts
 │       │       └── errors/
 │       │           ├── app-error.test.ts
-│       │           └── problem-details.test.ts
+│       │           ├── problem-details.test.ts
+│       │           └── validation-error.test.ts
 │       ├── package.json
 │       ├── tsconfig.build.json
 │       ├── tsconfig.json
@@ -180,8 +184,8 @@ EventPulse-Analytics/
 - `server.ts` : point d'entrée du serveur HTTP. Il crée le serveur natif Node.js, l'écoute sur `PORT`, expose le cycle de vie et installe les handlers de signaux. Le serveur n'est démarré que lorsque ce fichier est exécuté directement.
 - `index.ts` : expose le nom du service et les informations de runtime. Ce fichier n'est pas le point d'entrée du serveur.
 - `config/` : schéma et chargement de l'environnement, ainsi que la configuration Pino.
-- `middleware/` : Request ID, logging HTTP et traitement centralisé des erreurs.
-- `errors/` : classe `AppError` et conversion des erreurs vers le format Problem Details.
+- `middleware/` : Request ID, logging HTTP, validation Zod des requêtes et traitement centralisé des erreurs.
+- `errors/` : classes `AppError` et `ValidationError`, conversion des erreurs vers le format Problem Details.
 - `routes/` : composition centralisée des routes, routeur API principal, espace versionné `/api/v1` et routeur de santé.
 - `test/` : tests unitaires et tests HTTP avec Vitest et Supertest.
 - `docs/` : documentation de découverte produit, UX et architecture de conception.
@@ -191,6 +195,12 @@ EventPulse-Analytics/
 Le routeur API principal est monté sur `/api`, puis le routeur de version sur `/v1`, ce qui expose le préfixe `/api/v1`. Les futurs routeurs de modules métier seront enregistrés dans `routes/v1/index.ts` afin de ne pas concentrer les routes dans `app.ts`. Aucun endpoint métier n'est encore enregistré dans cet espace.
 
 `GET /health` reste un contrôle opérationnel non versionné. Les routes inconnues, versionnées ou non, aboutissent au gestionnaire `404` central et conservent le format Problem Details.
+
+### Validation des requêtes
+
+Le middleware `validateRequest({ body, params, query })`, utilisé au niveau de la route, valide uniquement les sections configurées avec les schémas Zod fournis par la route. Une requête invalide est bloquée avant le handler et produit une réponse `400 VALIDATION_ERROR` au format Problem Details, avec un tableau `errors` contenant `path`, `code` et `message`. Les valeurs soumises ne sont pas renvoyées.
+
+Les données validées et transformées remplacent `req.body`, `req.params` et `req.query` avant l’exécution du handler. Cette écriture est compatible avec les getters d’Express 5 et ne modifie pas les types globaux d’Express.
 
 ## Endpoints disponibles
 
@@ -207,7 +217,7 @@ Le préfixe `/api/v1` est monté et réservé aux futurs contrats métier. Aucun
 - **Helmet** applique des en-têtes HTTP de sécurité.
 - **CORS** autorise en développement l'origine `http://localhost:5173`, avec les méthodes `GET`, `POST`, `PATCH` et `DELETE`, et les en-têtes `Content-Type`, `Authorization` et `X-Request-Id`. Les credentials sont désactivés et le cache de préflight est de 600 secondes. En production, aucune origine cross-origin n'est autorisée par défaut.
 - **Request ID** : un identifiant valide fourni dans `X-Request-Id` est conservé, sinon un UUID est généré. L'identifiant est renvoyé dans la réponse et associé au logger de la requête.
-- **Problem Details** : les erreurs HTTP utilisent le type de contenu `application/problem+json` et exposent notamment `type`, `title`, `status`, `detail`, `instance`, `code` et `requestId`.
+- **Problem Details** : les erreurs HTTP utilisent le type de contenu `application/problem+json` et exposent notamment `type`, `title`, `status`, `detail`, `instance`, `code` et `requestId`. Les erreurs de validation ajoutent un tableau `errors` avec `path`, `code` et `message`, sans exposer les valeurs soumises.
 - **Corps JSON** : la limite est fixée à `100kb`. Un JSON malformé produit une erreur `400 INVALID_JSON` et un payload trop volumineux une erreur `413 PAYLOAD_TOO_LARGE`.
 - **Erreurs inattendues** : elles sont converties en réponse `500 INTERNAL_SERVER_ERROR` sans exposer les détails internes.
 - **Logger structuré** : Pino produit des logs JSON horodatés, avec le champ `service`, le contexte de requête et le masquage des champs sensibles courants tels que les mots de passe, tokens, en-têtes d'autorisation, cookies, secrets et clés API.
@@ -238,6 +248,7 @@ Le processus n'appelle pas `process.exit()` lors d'un arrêt normal ; il se term
 - logger Pino structuré et masquage des données sensibles ;
 - middleware Request ID et logging HTTP ;
 - modèle d'erreur centralisé et réponses Problem Details ;
+- validation réutilisable des corps, paramètres de route et paramètres de requête avec Zod ;
 - application Express avec Helmet, CORS, limite JSON et gestion globale des erreurs ;
 - composition centralisée des routes et espace versionné `/api/v1` ;
 - endpoint `GET /health` ;

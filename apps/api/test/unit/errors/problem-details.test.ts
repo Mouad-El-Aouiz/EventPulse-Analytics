@@ -7,6 +7,11 @@ import {
   mapAppErrorToProblemDetails,
   mapErrorToProblemDetails,
 } from '../../../src/errors/problem-details.js';
+import {
+  VALIDATION_ERROR_CODE,
+  VALIDATION_ERROR_DETAIL,
+  ValidationError,
+} from '../../../src/errors/validation-error.js';
 
 describe('Problem Details', () => {
   it('exposes the application/problem+json media type', () => {
@@ -33,6 +38,48 @@ describe('Problem Details', () => {
       instance: '/api/v1/events/42',
       code: 'EVENT_NOT_FOUND',
       requestId: 'req-123',
+    });
+  });
+
+  it('includes structured field errors for validation failures only', () => {
+    const error = new ValidationError([
+      {
+        path: 'body.email',
+        code: 'invalid_format',
+        message: 'Invalid email format.',
+      },
+      {
+        path: 'params.id',
+        code: 'too_small',
+        message: 'Value is too small.',
+      },
+    ]);
+
+    expect(
+      mapAppErrorToProblemDetails(error, {
+        requestId: 'req-validation',
+        instance: '/api/v1/events',
+      }),
+    ).toEqual({
+      type: DEFAULT_PROBLEM_TYPE,
+      title: 'Bad Request',
+      status: 400,
+      detail: VALIDATION_ERROR_DETAIL,
+      instance: '/api/v1/events',
+      code: VALIDATION_ERROR_CODE,
+      requestId: 'req-validation',
+      errors: [
+        {
+          path: 'body.email',
+          code: 'invalid_format',
+          message: 'Invalid email format.',
+        },
+        {
+          path: 'params.id',
+          code: 'too_small',
+          message: 'Value is too small.',
+        },
+      ],
     });
   });
 

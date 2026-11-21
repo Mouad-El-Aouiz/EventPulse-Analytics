@@ -128,13 +128,19 @@ EventPulse-Analytics/
 │       │   ├── errors/
 │       │   │   ├── app-error.ts
 │       │   │   └── problem-details.ts
-│       │   └── middleware/
-│       │       ├── error-handler.ts
-│       │       └── request-logger.ts
+│       │   ├── middleware/
+│       │   │   ├── error-handler.ts
+│       │   │   └── request-logger.ts
+│       │   └── routes/
+│       │       ├── index.ts
+│       │       ├── health.routes.ts
+│       │       └── v1/
+│       │           └── index.ts
 │       ├── test/
 │       │   ├── http/
 │       │   │   ├── app.test.ts
 │       │   │   ├── request-logger.test.ts
+│       │   │   ├── routes.test.ts
 │       │   │   ├── server.test.ts
 │       │   │   └── supertest.test.ts
 │       │   └── unit/
@@ -170,14 +176,21 @@ EventPulse-Analytics/
 
 ### Rôle des principaux fichiers
 
-- `app.ts` : construit l'application Express, configure Helmet, CORS, le logger de requêtes, la limite JSON, expose `GET /health`, gère les routes inconnues et branche le gestionnaire d'erreurs central.
+- `app.ts` : construit l'application Express, configure Helmet, CORS, le logger de requêtes et la limite JSON, monte la composition des routes, gère les routes inconnues et branche le gestionnaire d'erreurs central.
 - `server.ts` : point d'entrée du serveur HTTP. Il crée le serveur natif Node.js, l'écoute sur `PORT`, expose le cycle de vie et installe les handlers de signaux. Le serveur n'est démarré que lorsque ce fichier est exécuté directement.
 - `index.ts` : expose le nom du service et les informations de runtime. Ce fichier n'est pas le point d'entrée du serveur.
 - `config/` : schéma et chargement de l'environnement, ainsi que la configuration Pino.
 - `middleware/` : Request ID, logging HTTP et traitement centralisé des erreurs.
 - `errors/` : classe `AppError` et conversion des erreurs vers le format Problem Details.
+- `routes/` : composition centralisée des routes, routeur API principal, espace versionné `/api/v1` et routeur de santé.
 - `test/` : tests unitaires et tests HTTP avec Vitest et Supertest.
 - `docs/` : documentation de découverte produit, UX et architecture de conception.
+
+### Composition et versionnement des routes
+
+Le routeur API principal est monté sur `/api`, puis le routeur de version sur `/v1`, ce qui expose le préfixe `/api/v1`. Les futurs routeurs de modules métier seront enregistrés dans `routes/v1/index.ts` afin de ne pas concentrer les routes dans `app.ts`. Aucun endpoint métier n'est encore enregistré dans cet espace.
+
+`GET /health` reste un contrôle opérationnel non versionné. Les routes inconnues, versionnées ou non, aboutissent au gestionnaire `404` central et conservent le format Problem Details.
 
 ## Endpoints disponibles
 
@@ -187,7 +200,7 @@ EventPulse-Analytics/
 
 `GET /health` est un contrôle HTTP simple permettant de vérifier que le processus répond. Ce n'est pas un contrôle avancé de disponibilité des dépendances externes.
 
-Aucune route métier, d'authentification ou d'administration n'est exposée à ce stade. Toute autre route retourne une erreur `404` au format Problem Details.
+Le préfixe `/api/v1` est monté et réservé aux futurs contrats métier. Aucune route métier, d'authentification ou d'administration n'est exposée à ce stade. Toute requête inconnue sous `/api/v1` ou ailleurs retourne une erreur `404` au format Problem Details.
 
 ## Gestion des erreurs et sécurité HTTP
 
@@ -226,6 +239,7 @@ Le processus n'appelle pas `process.exit()` lors d'un arrêt normal ; il se term
 - middleware Request ID et logging HTTP ;
 - modèle d'erreur centralisé et réponses Problem Details ;
 - application Express avec Helmet, CORS, limite JSON et gestion globale des erreurs ;
+- composition centralisée des routes et espace versionné `/api/v1` ;
 - endpoint `GET /health` ;
 - serveur HTTP natif avec arrêt gracieux, timeout et gestion des signaux ;
 - tests unitaires et HTTP avec Vitest et Supertest ;

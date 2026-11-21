@@ -6,6 +6,7 @@ import { env } from './config/env.js';
 import { AppError } from './errors/app-error.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { requestLogger } from './middleware/request-logger.js';
+import { registerRoutes } from './routes/index.js';
 
 const JSON_BODY_LIMIT = '100kb';
 const ROUTE_NOT_FOUND_CODE = 'ROUTE_NOT_FOUND';
@@ -46,9 +47,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use(requestLogger({ logger: options.logger }));
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
-  app.get('/health', (_req, res) => {
-    res.status(200).json({ status: 'ok' });
-  });
+  registerRoutes(app);
 
   app.use((_req, _res, next) => {
     next(

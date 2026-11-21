@@ -129,6 +129,9 @@ EventPulse-Analytics/
 │       │   │   ├── app-error.ts
 │       │   │   ├── problem-details.ts
 │       │   │   └── validation-error.ts
+│       │   ├── http/
+│       │   │   ├── pagination.ts
+│       │   │   └── responses.ts
 │       │   ├── middleware/
 │       │   │   ├── error-handler.ts
 │       │   │   ├── request-logger.ts
@@ -152,10 +155,13 @@ EventPulse-Analytics/
 │       │       ├── get-runtime-info.test.ts
 │       │       ├── logger.test.ts
 │       │       ├── server-import.test.ts
-│       │       └── errors/
-│       │           ├── app-error.test.ts
-│       │           ├── problem-details.test.ts
-│       │           └── validation-error.test.ts
+│       │       ├── errors/
+│       │       │   ├── app-error.test.ts
+│       │       │   ├── problem-details.test.ts
+│       │       │   └── validation-error.test.ts
+│       │       └── http/
+│       │           ├── pagination.test.ts
+│       │           └── responses.test.ts
 │       ├── package.json
 │       ├── tsconfig.build.json
 │       ├── tsconfig.json
@@ -186,6 +192,7 @@ EventPulse-Analytics/
 - `config/` : schéma et chargement de l'environnement, ainsi que la configuration Pino.
 - `middleware/` : Request ID, logging HTTP, validation Zod des requêtes et traitement centralisé des erreurs.
 - `errors/` : classes `AppError` et `ValidationError`, conversion des erreurs vers le format Problem Details.
+- `http/` : enveloppes de réponses de succès et calculs de pagination réutilisables.
 - `routes/` : composition centralisée des routes, routeur API principal, espace versionné `/api/v1` et routeur de santé.
 - `test/` : tests unitaires et tests HTTP avec Vitest et Supertest.
 - `docs/` : documentation de découverte produit, UX et architecture de conception.
@@ -201,6 +208,12 @@ Le routeur API principal est monté sur `/api`, puis le routeur de version sur `
 Le middleware `validateRequest({ body, params, query })`, utilisé au niveau de la route, valide uniquement les sections configurées avec les schémas Zod fournis par la route. Une requête invalide est bloquée avant le handler et produit une réponse `400 VALIDATION_ERROR` au format Problem Details, avec un tableau `errors` contenant `path`, `code` et `message`. Les valeurs soumises ne sont pas renvoyées.
 
 Les données validées et transformées remplacent `req.body`, `req.params` et `req.query` avant l’exécution du handler. Cette écriture est compatible avec les getters d’Express 5 et ne modifie pas les types globaux d’Express.
+
+### Réponses de succès et pagination
+
+Les réponses de succès sont construites avec `singleResponse`, `collectionResponse` et `paginatedResponse`. Elles suivent le contrat de `API_DESIGN.md` : ressource unique `{ "data": ... }`, collection `{ "data": [...] }` et collection paginée `{ "data": [...], "meta": { "limit", "hasMore", "nextCursor" } }`.
+
+Les collections paginées utilisent le curseur opaque prévu en v1. `nextCursor` vaut `null` sur la dernière page et `limit` est borné de 1 à 100. `calculateOffsetPagination` fournit le calcul `offset` et `totalPages` pour les usages internes, notamment les exports de rapports, sans exposer de pagination par offset dans l’API. Pour zéro résultat, `totalPages` vaut `0`.
 
 ## Endpoints disponibles
 
@@ -249,6 +262,7 @@ Le processus n'appelle pas `process.exit()` lors d'un arrêt normal ; il se term
 - middleware Request ID et logging HTTP ;
 - modèle d'erreur centralisé et réponses Problem Details ;
 - validation réutilisable des corps, paramètres de route et paramètres de requête avec Zod ;
+- utilitaires de réponses de succès et de pagination par curseur ;
 - application Express avec Helmet, CORS, limite JSON et gestion globale des erreurs ;
 - composition centralisée des routes et espace versionné `/api/v1` ;
 - endpoint `GET /health` ;

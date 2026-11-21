@@ -14,7 +14,12 @@
     "start": "npm run start --workspace @eventpulse/api",
     "test": "npm run test --workspace @eventpulse/api",
     "test:watch": "npm run test:watch --workspace @eventpulse/api",
-    "test:coverage": "npm run test:coverage --workspace @eventpulse/api"
+    "test:coverage": "npm run test:coverage --workspace @eventpulse/api",
+    "prisma:generate": "npm run prisma:generate --workspace @eventpulse/api",
+    "prisma:validate": "prisma validate --schema apps/api/prisma/schema.prisma",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:check": "npm run db:check --workspace @eventpulse/api"
   },
   "workspaces": [
     "apps/*"

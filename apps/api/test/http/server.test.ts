@@ -15,6 +15,7 @@ vi.mock('../../src/config/env.js', () => ({
 
 import { env } from '../../src/config/env.js';
 import { createLogger, logger as defaultLogger } from '../../src/config/logger.js';
+import type { DatabaseLifecycle } from '../../src/database/prisma.js';
 import {
   main,
   registerShutdownHandlers,
@@ -113,6 +114,13 @@ class TestSignalTarget implements SignalTarget {
   }
 }
 
+function createDatabaseLifecycle(overrides: Partial<DatabaseLifecycle> = {}): DatabaseLifecycle {
+  return {
+    connect: overrides.connect ?? vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    disconnect: overrides.disconnect ?? vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  };
+}
+
 function createSignalHandle(): {
   handle: ServerHandle;
   shutdown: ReturnType<typeof vi.fn>;
@@ -182,6 +190,78 @@ describe('server lifecycle', () => {
       expect.objectContaining({
         level: 'info',
         msg: 'HTTP server shutdown completed',
+        port: handle.port,
+      }),
+    );
+  });
+
+  it('connects the database before shutdown and disconnects after the HTTP server closes', async () => {
+    const { logger, entries } = createCapturedLogger();
+    const connect = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const disconnect = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle = await startTestServer(logger, {
+      database: createDatabaseLifecycle({ connect, disconnect }),
+    });
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        msg: 'Database connection established',
+      }),
+    );
+
+    await handle.shutdown('database-test');
+
+    expect(handle.server.listening).toBe(false);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        msg: 'Database connection closed',
+        port: handle.port,
+      }),
+    );
+  });
+
+  it('rejects startup when the database connection fails', async () => {
+    const { logger, entries } = createCapturedLogger();
+    const failure = new Error('database unavailable');
+    const connect = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
+    const disconnect = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      startServer({
+        logger,
+        database: createDatabaseLifecycle({ connect, disconnect }),
+      }),
+    ).rejects.toBe(failure);
+
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'fatal',
+        msg: 'Database connection failed',
+      }),
+    );
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('logs database disconnection failures without blocking shutdown', async () => {
+    const { logger, entries } = createCapturedLogger();
+    const failure = new Error('disconnect failed');
+    const disconnect = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
+    const handle = await startTestServer(logger, {
+      database: createDatabaseLifecycle({ disconnect }),
+    });
+
+    await expect(handle.shutdown('disconnect-failure-test')).resolves.toBeUndefined();
+
+    expect(handle.server.listening).toBe(false);
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        msg: 'Database disconnection failed',
         port: handle.port,
       }),
     );
@@ -309,14 +389,18 @@ describe('server lifecycle', () => {
     const blocker = await occupyAvailablePort();
     const previousExitCode = process.exitCode;
     const previousLogLevel = defaultLogger.level;
+    const connect = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const disconnect = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
 
     try {
       env.PORT = blocker.port;
       defaultLogger.level = 'silent';
 
-      await main();
+      await main({ database: createDatabaseLifecycle({ connect, disconnect }) });
 
       expect(process.exitCode).toBe(1);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(disconnect).toHaveBeenCalledTimes(1);
     } finally {
       process.exitCode = previousExitCode;
       defaultLogger.level = previousLogLevel;

@@ -1,9 +1,24 @@
 import { z } from 'zod';
 
+const POSTGRES_PROTOCOLS = new Set(['postgres:', 'postgresql:']);
+
+function isPostgresUrl(value: string): boolean {
+  try {
+    return POSTGRES_PROTOCOLS.has(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']).default('info'),
+  DATABASE_URL: z
+    .string()
+    .url()
+    .refine(isPostgresUrl, { message: 'Must be a PostgreSQL connection URL.' }),
+  DATABASE_POOL_SIZE: z.coerce.number().int().min(1).default(10),
 });
 
 export type Env = z.infer<typeof envSchema>;

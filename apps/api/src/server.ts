@@ -5,6 +5,7 @@ import type { Logger } from 'pino';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger as defaultLogger } from './config/logger.js';
+import { createPrismaDatabase, type DatabaseLifecycle } from './database/prisma.js';
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
@@ -18,6 +19,10 @@ const SHUTDOWN_TIMED_OUT_MESSAGE =
   'HTTP server shutdown timed out; forcing remaining connections to close';
 const SHUTDOWN_COMPLETED_MESSAGE = 'HTTP server shutdown completed';
 const SHUTDOWN_FAILED_MESSAGE = 'HTTP server shutdown failed';
+const DATABASE_CONNECTED_MESSAGE = 'Database connection established';
+const DATABASE_CONNECTION_FAILED_MESSAGE = 'Database connection failed';
+const DATABASE_DISCONNECTED_MESSAGE = 'Database connection closed';
+const DATABASE_DISCONNECT_FAILED_MESSAGE = 'Database disconnection failed';
 
 export interface ServerHandle {
   readonly server: Server;
@@ -29,6 +34,7 @@ export interface StartServerOptions {
   app?: Express;
   logger?: Logger;
   shutdownTimeoutMs?: number;
+  database?: DatabaseLifecycle;
 }
 
 export interface SignalTarget {
@@ -46,6 +52,7 @@ interface ServerLifecycleOptions {
   logger: Logger;
   port: number;
   shutdownTimeoutMs: number;
+  database?: DatabaseLifecycle;
 }
 
 function listen(server: Server, port: number): Promise<void> {
@@ -81,6 +88,23 @@ function getListeningPort(server: Server): number {
   }
 
   return address.port;
+}
+
+async function disconnectDatabase(
+  database: DatabaseLifecycle | undefined,
+  logger: Logger,
+  port: number,
+): Promise<void> {
+  if (database === undefined) {
+    return;
+  }
+
+  try {
+    await database.disconnect();
+    logger.info({ port }, DATABASE_DISCONNECTED_MESSAGE);
+  } catch (error) {
+    logger.error({ err: error, port }, DATABASE_DISCONNECT_FAILED_MESSAGE);
+  }
 }
 
 function createServerHandle(server: Server, options: ServerLifecycleOptions): ServerHandle {
@@ -127,7 +151,10 @@ function createServerHandle(server: Server, options: ServerLifecycleOptions): Se
             options.logger.info({ port: options.port }, SHUTDOWN_COMPLETED_MESSAGE);
           }
 
-          resolve();
+          void (async () => {
+            await disconnectDatabase(options.database, options.logger, options.port);
+            resolve();
+          })();
         });
 
         server.closeIdleConnections();
@@ -143,11 +170,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
   const app = options.app ?? createApp({ logger });
   const requestedPort = env.PORT;
   const server = createServer(app);
+  const database = options.database;
+
+  if (database !== undefined) {
+    try {
+      await database.connect();
+      logger.info(DATABASE_CONNECTED_MESSAGE);
+    } catch (error) {
+      logger.fatal({ err: error }, DATABASE_CONNECTION_FAILED_MESSAGE);
+      throw error;
+    }
+  }
 
   try {
     await listen(server, requestedPort);
   } catch (error) {
     logger.fatal({ err: error, port: requestedPort }, SERVER_START_FAILED_MESSAGE);
+    await disconnectDatabase(database, logger, requestedPort);
     throw error;
   }
 
@@ -155,6 +194,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
     logger,
     port: getListeningPort(server),
     shutdownTimeoutMs: options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
+    database,
   });
 
   logger.info({ port: handle.port }, SERVER_STARTED_MESSAGE);
@@ -205,12 +245,13 @@ export function registerShutdownHandlers(
   return cleanup;
 }
 
-export async function main(): Promise<void> {
-  const logger = defaultLogger;
+export async function main(options: StartServerOptions = {}): Promise<void> {
+  const logger = options.logger ?? defaultLogger;
   let handle: ServerHandle;
 
   try {
-    handle = await startServer({ logger });
+    const database = options.database ?? createPrismaDatabase();
+    handle = await startServer({ ...options, logger, database });
   } catch {
     process.exitCode = 1;
     return;

@@ -19,6 +19,8 @@ describe('env loader', () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('PORT', '4567');
     vi.stubEnv('LOG_LEVEL', 'warn');
+    vi.stubEnv('DATABASE_URL', 'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse');
+    vi.stubEnv('DATABASE_POOL_SIZE', '5');
 
     const { env } = await import('../../src/config/env.js');
 
@@ -26,6 +28,8 @@ describe('env loader', () => {
       NODE_ENV: 'test',
       PORT: 4567,
       LOG_LEVEL: 'warn',
+      DATABASE_URL: 'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse',
+      DATABASE_POOL_SIZE: 5,
     });
     expect(envConfigMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -39,6 +43,7 @@ describe('env loader', () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('PORT', 'invalid');
     vi.stubEnv('LOG_LEVEL', 'info');
+    vi.stubEnv('DATABASE_URL', 'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse');
 
     await expect(import('../../src/config/env.js')).rejects.toThrow(/PORT/);
   });

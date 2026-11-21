@@ -1,0 +1,226 @@
+import { createServer, type Server } from 'node:http';
+import { pathToFileURL } from 'node:url';
+import type { Express } from 'express';
+import type { Logger } from 'pino';
+import { createApp } from './app.js';
+import { env } from './config/env.js';
+import { logger as defaultLogger } from './config/logger.js';
+
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
+const DEFAULT_SHUTDOWN_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
+
+const SERVER_STARTED_MESSAGE = 'HTTP server started';
+const SERVER_START_FAILED_MESSAGE = 'Failed to start HTTP server';
+const SERVER_ERROR_MESSAGE = 'HTTP server error';
+const SHUTDOWN_SIGNAL_RECEIVED_MESSAGE = 'Shutdown signal received';
+const SHUTDOWN_STARTED_MESSAGE = 'HTTP server shutdown started';
+const SHUTDOWN_TIMED_OUT_MESSAGE =
+  'HTTP server shutdown timed out; forcing remaining connections to close';
+const SHUTDOWN_COMPLETED_MESSAGE = 'HTTP server shutdown completed';
+const SHUTDOWN_FAILED_MESSAGE = 'HTTP server shutdown failed';
+
+export interface ServerHandle {
+  readonly server: Server;
+  readonly port: number;
+  shutdown(reason?: string): Promise<void>;
+}
+
+export interface StartServerOptions {
+  app?: Express;
+  logger?: Logger;
+  shutdownTimeoutMs?: number;
+}
+
+export interface SignalTarget {
+  on(signal: NodeJS.Signals, listener: () => void): unknown;
+  off(signal: NodeJS.Signals, listener: () => void): unknown;
+}
+
+export interface RegisterShutdownHandlersOptions {
+  logger?: Logger;
+  signals?: readonly NodeJS.Signals[];
+  signalTarget?: SignalTarget;
+}
+
+interface ServerLifecycleOptions {
+  logger: Logger;
+  port: number;
+  shutdownTimeoutMs: number;
+}
+
+function listen(server: Server, port: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolve();
+    };
+
+    server.once('error', onError);
+    server.once('listening', onListening);
+
+    try {
+      server.listen(port);
+    } catch (error) {
+      server.off('error', onError);
+      server.off('listening', onListening);
+      reject(error);
+    }
+  });
+}
+
+function getListeningPort(server: Server): number {
+  const address = server.address();
+
+  if (address === null || typeof address === 'string') {
+    throw new Error('HTTP server is not listening on a TCP port');
+  }
+
+  return address.port;
+}
+
+function createServerHandle(server: Server, options: ServerLifecycleOptions): ServerHandle {
+  let shutdownPromise: Promise<void> | undefined;
+
+  const onServerError = (error: Error): void => {
+    options.logger.error({ err: error, port: options.port }, SERVER_ERROR_MESSAGE);
+  };
+
+  server.on('error', onServerError);
+
+  return {
+    server,
+    port: options.port,
+    shutdown(reason = 'manual'): Promise<void> {
+      if (shutdownPromise) {
+        return shutdownPromise;
+      }
+
+      shutdownPromise = new Promise<void>((resolve) => {
+        options.logger.info({ reason, port: options.port }, SHUTDOWN_STARTED_MESSAGE);
+
+        let timeout: NodeJS.Timeout | undefined = setTimeout(() => {
+          options.logger.warn(
+            { port: options.port, timeoutMs: options.shutdownTimeoutMs },
+            SHUTDOWN_TIMED_OUT_MESSAGE,
+          );
+          server.closeAllConnections();
+        }, options.shutdownTimeoutMs);
+
+        timeout.unref();
+
+        server.close((error) => {
+          if (timeout) {
+            clearTimeout(timeout);
+            timeout = undefined;
+          }
+
+          server.off('error', onServerError);
+
+          if (error) {
+            options.logger.error({ err: error, port: options.port }, SHUTDOWN_FAILED_MESSAGE);
+          } else {
+            options.logger.info({ port: options.port }, SHUTDOWN_COMPLETED_MESSAGE);
+          }
+
+          resolve();
+        });
+
+        server.closeIdleConnections();
+      });
+
+      return shutdownPromise;
+    },
+  };
+}
+
+export async function startServer(options: StartServerOptions = {}): Promise<ServerHandle> {
+  const logger = options.logger ?? defaultLogger;
+  const app = options.app ?? createApp({ logger });
+  const requestedPort = env.PORT;
+  const server = createServer(app);
+
+  try {
+    await listen(server, requestedPort);
+  } catch (error) {
+    logger.fatal({ err: error, port: requestedPort }, SERVER_START_FAILED_MESSAGE);
+    throw error;
+  }
+
+  const handle = createServerHandle(server, {
+    logger,
+    port: getListeningPort(server),
+    shutdownTimeoutMs: options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  });
+
+  logger.info({ port: handle.port }, SERVER_STARTED_MESSAGE);
+
+  return handle;
+}
+
+export function registerShutdownHandlers(
+  handle: ServerHandle,
+  options: RegisterShutdownHandlersOptions = {},
+): () => void {
+  const logger = options.logger ?? defaultLogger;
+  const signals = options.signals ?? DEFAULT_SHUTDOWN_SIGNALS;
+  const signalTarget = options.signalTarget ?? process;
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  let cleanedUp = false;
+
+  const cleanup = (): void => {
+    if (cleanedUp) {
+      return;
+    }
+
+    cleanedUp = true;
+
+    for (const [signal, handler] of handlers) {
+      signalTarget.off(signal, handler);
+    }
+
+    handlers.clear();
+  };
+
+  for (const signal of signals) {
+    const handler = (): void => {
+      logger.info({ signal }, SHUTDOWN_SIGNAL_RECEIVED_MESSAGE);
+
+      void handle
+        .shutdown(`signal:${signal}`)
+        .catch((error: unknown) => {
+          logger.error({ err: error, signal }, SHUTDOWN_FAILED_MESSAGE);
+        })
+        .finally(cleanup);
+    };
+
+    handlers.set(signal, handler);
+    signalTarget.on(signal, handler);
+  }
+
+  return cleanup;
+}
+
+export async function main(): Promise<void> {
+  const logger = defaultLogger;
+  let handle: ServerHandle;
+
+  try {
+    handle = await startServer({ logger });
+  } catch {
+    process.exitCode = 1;
+    return;
+  }
+
+  registerShutdownHandlers(handle, { logger });
+}
+
+const entrypoint = process.argv[1];
+
+if (entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).href) {
+  void main();
+}

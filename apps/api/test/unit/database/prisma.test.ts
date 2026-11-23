@@ -19,11 +19,14 @@ vi.mock('@prisma/client', () => ({
   },
 }));
 
+const envMock = vi.hoisted(() => ({
+  DATABASE_URL: 'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse?schema=public',
+  DATABASE_POOL_SIZE: 7,
+  DATABASE_RUNTIME_URL: undefined as string | undefined,
+}));
+
 vi.mock('../../../src/config/env.js', () => ({
-  env: {
-    DATABASE_URL: 'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse?schema=public',
-    DATABASE_POOL_SIZE: 7,
-  },
+  env: envMock,
 }));
 
 type PrismaModule = typeof import('../../../src/database/prisma.js');
@@ -36,6 +39,7 @@ beforeEach(async () => {
   prismaMocks.connect.mockReset().mockResolvedValue(undefined);
   prismaMocks.disconnect.mockReset().mockResolvedValue(undefined);
   prismaMocks.queryRaw.mockReset().mockResolvedValue([{ '?column?': 1 }]);
+  envMock.DATABASE_RUNTIME_URL = undefined;
 
   prismaModule = await import('../../../src/database/prisma.js');
 });
@@ -58,6 +62,21 @@ describe('Prisma client factory', () => {
       datasources: {
         db: {
           url: expect.stringContaining('schema=public'),
+        },
+      },
+    });
+  });
+
+  it('prefers DATABASE_RUNTIME_URL when configured', () => {
+    envMock.DATABASE_RUNTIME_URL =
+      'postgresql://eventpulse_app:secret@localhost:5432/eventpulse?schema=public';
+
+    prismaModule.getPrismaClient();
+
+    expect(prismaMocks.constructor).toHaveBeenCalledWith({
+      datasources: {
+        db: {
+          url: expect.stringContaining('eventpulse_app:secret'),
         },
       },
     });

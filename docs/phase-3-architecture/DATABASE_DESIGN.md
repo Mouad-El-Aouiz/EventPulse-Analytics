@@ -26,7 +26,7 @@
 | Emails | `citext` pour l'insensibilité à la casse, sans contrainte d'unicité pour les participants |
 | Identifiants référencés | UUID ; `resource_id` d'audit en `text` pour accepter les références externes |
 
-**Extensions PostgreSQL :** `citext` (obligatoire), `pg_trgm` (recherche, optionnelle mais recommandée).
+**Extensions PostgreSQL :** `citext` (obligatoire) et `pg_trgm` (obligatoire). Les deux sont créées par la migration initiale `20261121225300_init_database_schema` ; `20261122105000_trgm_indexes` dépend de `pg_trgm` et échouerait sans elle. Aucune migration ne supprime ces extensions (le scanner refuse `DROP EXTENSION pg_trgm`).
 
 ---
 
@@ -758,16 +758,22 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 
 1. `organization_id` est `NOT NULL` sur toutes les tables métier.
 2. Les tables parents exposent `UNIQUE (organization_id, id)`.
-3. Les clés étrangères composites incluent `organization_id` :
+3. Les 19 clés étrangères composites incluent `organization_id`. Parmi elles, **6 sont des FK à 3 colonnes de cohérence événementielle** (voir point 4) et 13 sont des FK composites à 2 colonnes. Les principales :
    - `registrations (organization_id, event_id) → events`
    - `registrations (organization_id, participant_id) → participants`
-   - `registrations (organization_id, ticket_id) → tickets`
-   - `transactions (organization_id, registration_id) → registrations`
+   - `registrations (organization_id, event_id, ticket_id) → tickets` (3 colonnes)
+   - `transactions (organization_id, event_id, registration_id) → registrations` (3 colonnes)
+   - `transactions (organization_id, event_id, booth_reservation_id) → booth_reservations` (3 colonnes)
    - `check_ins (organization_id, event_id) → events`
+   - `check_ins (organization_id, event_id, registration_id) → registrations` (3 colonnes)
+   - `check_ins (organization_id, participant_id, registration_id) → registrations` (3 colonnes)
    - `booths (organization_id, event_id) → events`
-   - `booth_reservations (organization_id, booth_id) → booths`
+   - `booth_reservations (organization_id, event_id, booth_id) → booths` (3 colonnes)
    - `refunds (organization_id, transaction_id) → transactions`
-4. Une référence croisée entre organisations est impossible au niveau SQL, pas seulement applicatif.
+4. Les FK 3 colonnes de cohérence événementielle référencent des contraintes uniques 3 colonnes (`tickets_org_event_id_uq`, `booths_org_event_id_uq`, `registrations_org_event_id_uq`, `registrations_org_participant_id_uq`, `booth_reservations_org_event_id_uq`) avec `ON UPDATE RESTRICT ON DELETE RESTRICT`. Elles empêchent qu'un billet, un stand, une inscription, une réservation ou un check-in référence une ligne d'un autre événement. Les FK composites à 2 colonnes qu'elles remplacent ont été supprimées dans `20261122101000_event_integrity_constraints`, avec directive explicite du scanner ; aucune FK simple parallèle ne subsiste pour ces relations.
+5. Les colonnes nullables de `check_ins` utilisent `MATCH SIMPLE` : la cohérence s'applique dès qu'une référence est présente. Le CHECK `check_ins_status_reason_chk` exige les trois références pour un check-in `VALID`.
+6. Une référence croisée entre organisations ou entre événements est impossible au niveau SQL, pas seulement applicatif.
+7. Le catalogue effectif est contrôlé par `npm run db:verify:integrity` (19 FK composites, 6 index partiels, 25 CHECK, 5 contraintes uniques, 18 triggers, 5 index trigram, 3 tables immuables), soit 126 contrôles exécutés.
 
 ### 6.2 Contraintes conditionnelles (index partiels)
 
@@ -779,6 +785,8 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | Transaction stand unique | `UNIQUE (booth_reservation_id) WHERE type = 'BOOTH'` | BR-EXH-005 |
 | Code stand unique | `UNIQUE (organization_id, event_id, code) WHERE deleted_at IS NULL` | BR-EXH-002 |
 | Invitation en attente unique | `UNIQUE (organization_id, email) WHERE status = 'PENDING'` | US-ORG-01 |
+
+Les six index partiels uniques sont créés par `20261121231500_integrity_constraints` et vérifiés par `npm run db:verify:integrity` (nom, table, définition et caractère unique).
 
 ### 6.3 Contraintes de vérification
 
@@ -799,9 +807,28 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `trg_checkin_immutable` | `check_ins` | Refuse UPDATE et DELETE |
 | `trg_audit_immutable` | `audit_logs` | Refuse UPDATE et DELETE |
 | `trg_refund_immutable` | `refunds` | Refuse UPDATE et DELETE |
-| `trg_touch_updated_at` | tables mutables | Met à jour `updated_at` si non fourni |
+| `trg_touch_updated_at` | 14 tables mutables | Met à jour `updated_at` si la valeur est absente ou identique à l'ancienne |
+
+**Sécurité de `enforce_refund_cap()` :** la fonction est créée avec `SET search_path = pg_catalog, public` et référence `public."transactions"` / `public."refunds"` explicitement (`20261122107000_refund_cap_search_path`). Une table temporaire masquant un nom de relation est neutralisée par la qualification ; un schéma persistant détourné est neutralisé par le `search_path` fixé. La sérialisation des inserts concurrents repose sur `SELECT … FOR UPDATE` sous le niveau d'isolation `READ COMMITTED` par défaut.
 
 **Note :** les transitions de statut métier restent dans les services, pas dans les triggers, afin de conserver des messages d'erreur explicites et auditables.
+
+**Sémantique exacte de `trg_touch_updated_at` :** le trigger est `BEFORE UPDATE`, `FOR EACH ROW`, et exécute :
+
+```sql
+IF NEW."updated_at" IS NOT DISTINCT FROM OLD."updated_at" THEN
+  NEW."updated_at" := now();
+END IF;
+```
+
+Conséquences :
+
+- une mise à jour SQL directe qui omet `updated_at` est rafraîchie ;
+- une valeur explicite différente est respectée ;
+- une valeur explicite identique à l'ancienne est rafraîchie, car un trigger `BEFORE UPDATE` ne peut pas distinguer « omis » de « fourni identique » ;
+- le trigger n'est jamais installé sur `check_ins`, `refunds` ni `audit_logs`, qui sont immuables.
+
+**Immuabilité :** les triggers `prevent_immutable_mutation()` refusent toute opération `UPDATE` ou `DELETE` sur les trois tables d'historique, avec une exception SQL explicite (`restrict_violation`) mentionnant la table et l'opération. Les FK acteurs `ON DELETE SET NULL` restent en place ; supprimer un utilisateur référencé par une ligne immuable échoue donc, conformément à l'absence de suppression utilisateur (suspension via `memberships.status`).
 
 ---
 
@@ -827,6 +854,8 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 ### 7.2 Index de recherche textuelle
 
 - `pg_trgm` sur `participants.first_name`, `participants.last_name`, `participants.email`, `exhibitors.name`, `events.name`.
+- Les colonnes `varchar` utilisent l'opclasse `gin_trgm_ops`. `participants.email` est de type `citext` : l'index est une expression `((email)::text) gin_trgm_ops`.
+- La recherche doit utiliser `(email)::text ILIKE %q%` pour employer l'index email ; un `ILIKE` directement sur `citext` peut ne pas le sélectionner.
 - Recherche `ILIKE %q%` avec limite et tri ; pas de recherche plein texte en V1.
 
 ### 7.3 Règles
@@ -896,9 +925,24 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | SQL-05 | Trigger `updated_at` | Uniformité |
 | SQL-06 | Contraintes `CHECK` complexes (transactions, check-ins, réservations) | Support Prisma limité |
 | SQL-07 | Index trigram | Recherche |
-| SQL-08 | Révocation des privilèges UPDATE/DELETE sur tables immuables | Défense supplémentaire |
+| SQL-08 | Rôle groupe `eventpulse_app` sans LOGIN ; privilèges runtime séparés du propriétaire | Défense supplémentaire |
 
-Les migrations seront versionnées et revues ; aucune migration destructive n'est exécutée automatiquement en production.
+**SQL-08 — rôles et privilèges effectifs :**
+
+- le rôle de migration/propriétaire est `eventpulse` (superuser en développement Docker, à restreindre en production) ;
+- `eventpulse_app` est un rôle groupe `NOLOGIN`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`, sans mot de passe ;
+- le login runtime est créé hors migration par l'exploitation et hérite de `eventpulse_app` ;
+- `eventpulse_app` a `USAGE` (sans `CREATE`) sur `public` ;
+- il a `SELECT, INSERT, UPDATE, DELETE` sur les 17 tables mutables ;
+- il a uniquement `SELECT, INSERT` sur `check_ins`, `refunds`, `audit_logs` ;
+- il n'a ni `TRUNCATE`, ni `REFERENCES`, ni `TRIGGER` sur aucune table ;
+- toute nouvelle table doit être ajoutée explicitement aux grants, au manifeste et au vérificateur.
+
+**Limite de protection :** ces privilèges protègent contre l'usage du rôle applicatif, pas contre un propriétaire privilégié. Un propriétaire du schéma, un superutilisateur ou un rôle disposant des droits adéquats peut désactiver un trigger, supprimer une contrainte, remplacer une fonction ou `TRUNCATE` une table. Les protections sont garanties par le rôle runtime, le scanner de migrations, le vérificateur de catalogue et la revue humaine ; l'exploitation doit restreindre les rôles disposant de ces droits.
+
+En production, `DATABASE_RUNTIME_URL` est obligatoire et doit pointer vers un login membre de `eventpulse_app`. En développement uniquement, l'absence de cette variable provoque un fallback documenté sur `DATABASE_URL`.
+
+Les migrations sont versionnées et revues ; aucune migration destructive n'est exécutée automatiquement en production.
 
 ---
 

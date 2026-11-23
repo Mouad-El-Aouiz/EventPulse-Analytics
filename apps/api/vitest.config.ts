@@ -4,10 +4,15 @@ export default defineConfig({
   test: {
     environment: 'node',
     env: {
-      DATABASE_URL: 'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse?schema=public',
+      // Unit tests never connect to PostgreSQL. Point them at a dedicated,
+      // non-existent database so an accidental connection cannot reach the
+      // development database.
+      DATABASE_URL:
+        'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse_unit_test?schema=public',
+      DATABASE_POOL_SIZE: '1',
     },
     include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
-    exclude: [...configDefaults.exclude, '**/dist/**', '**/coverage/**'],
+    exclude: [...configDefaults.exclude, '**/dist/**', '**/coverage/**', '**/test/integration/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json-summary'],

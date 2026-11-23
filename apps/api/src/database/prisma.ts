@@ -8,6 +8,10 @@ export interface DatabaseLifecycle {
 
 let prismaClient: PrismaClient | undefined;
 
+function resolveRuntimeDatabaseUrl(): string {
+  return env.DATABASE_RUNTIME_URL ?? env.DATABASE_URL;
+}
+
 function buildDatabaseUrl(databaseUrl: string, poolSize: number): string {
   const url = new URL(databaseUrl);
   url.searchParams.set('connection_limit', String(poolSize));
@@ -19,7 +23,7 @@ export function getPrismaClient(): PrismaClient {
     prismaClient = new PrismaClient({
       datasources: {
         db: {
-          url: buildDatabaseUrl(env.DATABASE_URL, env.DATABASE_POOL_SIZE),
+          url: buildDatabaseUrl(resolveRuntimeDatabaseUrl(), env.DATABASE_POOL_SIZE),
         },
       },
     });

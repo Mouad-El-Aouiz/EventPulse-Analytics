@@ -48,13 +48,13 @@ La couverture de code est un indicateur, jamais une finalité. La priorité est 
 
 | Élément | Stratégie |
 |---|---|
-| PostgreSQL | Conteneur éphémère, migrations appliquées une fois par suite |
+| PostgreSQL | Instance Docker locale, base dédiée persistante `eventpulse_test` (suffixe `_test` obligatoire), migrée une fois par exécution. Un conteneur éphémère par exécution est une cible non implémentée. |
 | Redis | Conteneur éphémère par suite de workers |
 | Stockage | Adaptateur mémoire ou MinIO de test |
 | SMTP | Transport mémoire |
 | Horloge | Port `Clock` injecté pour DST et expirations |
-| Données | Factories déterministes, aucun réseau |
-| Nettoyage | Transaction annulée par test ou `TRUNCATE` ordonné |
+| Données | Factories déterministes, UUID uniques, aucun réseau |
+| Nettoyage | Aucun `TRUNCATE` ni reset automatique : données uniques par exécution, base conservée entre exécutions |
 
 **Règles :**
 
@@ -106,6 +106,11 @@ La couverture de code est un indicateur, jamais une finalité. La priorité est 
 - Contraintes testées au niveau SQL, pas seulement applicatif.
 - Un test d'isolation utilise deux organisations complètes.
 - Les triggers sont testés par tentative directe d'`UPDATE`/`DELETE`.
+- Les tests d'intégrité utilisent une base dédiée `eventpulse_test` (suffixe `_test` obligatoire), créée si absente et migrée avec `prisma migrate deploy`. Elle n'est jamais reset, drop ou truncate. Le garde-fou refuse une URL malformée, un nom de base dangereux (par exemple `eventpulse_prod_test`), un hôte distant sans `ALLOW_REMOTE_TEST_DATABASE=true` explicite et une taille de pool hors bornes.
+- Le catalogue PostgreSQL est vérifié sur la base réelle : FK composites, index partiels, CHECK, contraintes uniques, triggers, index trigram et privilèges effectifs du rôle `eventpulse_app`. Cette vérification de catalogue (126 contrôles) est complétée par des tests de comportement SQL réels : toute protection déclarée est aussi exercée par une tentative d'écriture, car un objet présent mais inefficace passerait une vérification purement structurelle.
+- Le scanner de migrations analyse les fichiers SQL et refuse tout `DROP` non autorisé d'un objet protégé. Il s'agit d'une analyse lexicale, pas d'un parseur PostgreSQL : le SQL dynamique (`DO`/`EXECUTE`) n'est pas évalué et la revue humaine reste obligatoire.
+- Les tests de concurrence (remboursements) s'exécutent sous le niveau d'isolation `READ COMMITTED` par défaut, celui sur lequel repose la garantie du `SELECT … FOR UPDATE`. Aucune isolation `SERIALIZABLE` n'est supposée.
+- Un login runtime externe n'est contrôlé que si `TEST_RUNTIME_LOGIN_ROLE` est défini ; sinon l'appartenance et les attributs réels du login ne sont pas vérifiés par la suite.
 
 ### 5.3 Exemples obligatoires
 
@@ -117,8 +122,38 @@ La couverture de code est un indicateur, jamais une finalité. La priorité est 
 | Plafond de remboursement | Dépassement refusé par trigger |
 | Immuabilité check-in | `UPDATE` et `DELETE` refusés |
 | FK composite | Référence cross-org impossible |
+| FK 3 colonnes événementielle | Billet, stand, inscription, transaction ou check-in d'un autre événement refusé |
 | Soft delete + unicité partielle | Code de stand réutilisable après suppression |
+| `api_keys.scopes` | Scope inventé et élément `NULL` refusés (`23514`) ; `ingestion:write`, tableau vide et doublons acceptés par le CHECK |
+| `updated_at` | Mise à jour SQL directe rafraîchie ; valeur explicite différente respectée |
+| Privilèges runtime | `UPDATE`/`DELETE` refusés sur tables immuables, `UPDATE` mutable autorisé |
+| Index trigram | Définitions `gin_trgm_ops` vérifiées, index email utilisé par `EXPLAIN` |
+| Concurrence remboursement | Deux inserts concurrents de 60 sur 100 : un seul accepté |
 | Dernier OWNER | Désactivation refusée |
+
+### 5.4 Suite d'intégrité SQL automatisée
+
+Commandes :
+
+```bash
+npm run db:check:migrations   # scanner statique des migrations
+npm run test:integration       # base eventpulse_test + migrations + tests
+npm run db:verify:integrity    # catalogue de la base de développement
+```
+
+Fichiers :
+
+- `apps/api/test/integration/schema-integrity.test.ts` — manifeste complet contre le catalogue, avec compteur réel (126 contrôles) ;
+- `refund-cap.test.ts` — cumul exact, dépassement de 0,01, statuts inéligibles, concurrence, `SQLSTATE 23514`, neutralisation `search_path`/table temporaire ;
+- `immutability.test.ts` — `UPDATE`/`DELETE` refusés par SQL direct et par le modèle Prisma, `SQLSTATE 23001`, suppression utilisateur référencé refusée (y compris `audit_logs` via `SET NULL`) ;
+- `event-integrity.test.ts` — matrice de couverture des 19 FK composites : chaque FK du manifeste est exercée par une écriture cross-org ou cross-event refusée ;
+- `api-key-scopes.test.ts` — CHECK, NOT NULL, doublons acceptés, élément `NULL` refusé ;
+- `updated-at.test.ts` — liste exacte des 14 tables, structure du trigger, sémantique « si inchangé », absence sur tables immuables ;
+- `privileges.test.ts` — attributs du rôle, matrice de privilèges, `SET ROLE` réel, contrôle optionnel du login via `TEST_RUNTIME_LOGIN_ROLE` ;
+- `indexes.test.ts` — catalogue trigram et plans `EXPLAIN` (prénom, nom, exposant, événement, email) ;
+- `partial-indexes.test.ts` — les 6 index partiels documentés.
+
+Les tests unitaires `integrity-manifest.test.ts` et `migration-safety.test.ts` protègent les identités exactes du manifeste (noms, colonnes, définitions, compteurs), le scanner et la protection des index de contraintes uniques, sans PostgreSQL. `test-database-guard.test.ts` couvre les garde-fous de la base de test et les erreurs de création concurrente.
 
 ---
 

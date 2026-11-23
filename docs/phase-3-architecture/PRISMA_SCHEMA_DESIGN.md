@@ -65,7 +65,7 @@ organizationId String  @map("organization_id") @db.Uuid
 ### 2.3 Horodatage et mise à jour
 
 - `createdAt` est toujours renseigné par la base ou l'application.
-- `updatedAt` utilise `@updatedAt` côté Prisma **et** un trigger SQL de secours pour les écritures hors ORM.
+- `updatedAt` utilise `@updatedAt` côté Prisma **et** un trigger SQL de secours pour les écritures hors ORM. Le trigger ne remplace la valeur que si elle est absente ou identique à l'ancienne ; une valeur explicite différente est respectée. Il est limité aux tables mutables.
 - Les tables immuables (`check_ins`, `refunds`, `audit_logs`) n'ont **pas** de `updatedAt`.
 
 ### 2.4 Soft delete
@@ -461,7 +461,7 @@ model Registration {
 
 - Aucune unicité `(eventId, participantId)` : une même personne peut avoir plusieurs inscriptions.
 - L'email n'est pas unique, conformément à BR-PAR-002.
-- La cohérence `ticket.eventId = registration.eventId` est garantie par la couche service et vérifiée par test.
+- La cohérence `ticket.eventId = registration.eventId` est garantie au niveau PostgreSQL par la FK 3 colonnes `registrations_ticket_org_event_fk`, et pas seulement par la couche service. Le service conserve la validation pour produire des erreurs métier explicites.
 
 ### 5.6 Finances
 
@@ -755,29 +755,43 @@ Prisma ne modélise pas les index partiels, les CHECK complexes ni les triggers.
 
 | # | Élément | Migration cible |
 |---|---|---|
-| P-01 | `citext`, `pg_trgm` | `0001_extensions` |
-| P-02 | `UNIQUE (booth_id) WHERE status = 'ACTIVE'` | `0010_partial_uniques` |
-| P-03 | `UNIQUE (organization_id, event_id, participant_id) WHERE status = 'VALID'` sur `check_ins` | `0010_partial_uniques` |
-| P-04 | `UNIQUE (registration_id) WHERE type = 'TICKET'` sur `transactions` | `0010_partial_uniques` |
-| P-05 | `UNIQUE (booth_reservation_id) WHERE type = 'BOOTH'` sur `transactions` | `0010_partial_uniques` |
-| P-06 | `UNIQUE (organization_id, event_id, code) WHERE deleted_at IS NULL` sur `booths` | `0010_partial_uniques` |
-| P-07 | `UNIQUE (organization_id, email) WHERE status = 'PENDING'` sur `invitations` | `0010_partial_uniques` |
-| P-08 | FK composites incluant `organization_id` | `0020_tenant_fks` |
-| P-09 | CHECK de cohérence (transactions, check-ins, réservations, montants) | `0030_checks` |
-| P-10 | Trigger plafond des remboursements | `0040_refund_cap` |
-| P-11 | Triggers d'immuabilité | `0050_immutability` |
-| P-12 | Trigger `updated_at` | `0060_touch_updated_at` |
-| P-13 | Index trigram | `0070_trgm_indexes` |
+| P-01 | `citext`, `pg_trgm` | `20261121225300_init_database_schema` |
+| P-02 | `UNIQUE (booth_id) WHERE status = 'ACTIVE'` | `20261121225300_init_database_schema` |
+| P-03 | `UNIQUE (organization_id, event_id, participant_id) WHERE status = 'VALID'` sur `check_ins` | `20261121225300_init_database_schema` |
+| P-04 | `UNIQUE (registration_id) WHERE type = 'TICKET'` sur `transactions` | `20261121225300_init_database_schema` |
+| P-05 | `UNIQUE (booth_reservation_id) WHERE type = 'BOOTH'` sur `transactions` | `20261121225300_init_database_schema` |
+| P-06 | `UNIQUE (organization_id, event_id, code) WHERE deleted_at IS NULL` sur `booths` | `20261121225300_init_database_schema` |
+| P-07 | `UNIQUE (organization_id, email) WHERE status = 'PENDING'` sur `invitations` | `20261121225300_init_database_schema` |
+| P-08 | FK composites incluant `organization_id` | `20261121231500_integrity_constraints` |
+| P-09 | CHECK de cohérence (transactions, check-ins, réservations, montants) | `20261121231500_integrity_constraints` |
+| P-10 | Trigger plafond des remboursements (puis durcissement `search_path` et qualification) | `20261122102000_refund_cap_trigger`, `20261122107000_refund_cap_search_path` |
+| P-11 | Triggers d'immuabilité | `20261122103000_immutability_triggers` |
+| P-12 | Trigger `updated_at` | `20261122104000_touch_updated_at_trigger` |
+| P-13 | Index trigram | `20261122105000_trgm_indexes` |
+| P-14 | `api_keys.scopes` NOT NULL + CHECK | `20261122100000_api_key_scopes_constraint` |
+| P-15 | FK 3 colonnes de cohérence événementielle | `20261122101000_event_integrity_constraints` |
+| P-16 | Rôle groupe runtime et privilèges | `20261122106000_runtime_privileges` |
 
 ### 6.1 FK composites et relations Prisma
 
-Prisma déclare les relations par clé simple (`eventId → events.id`). La migration `0020_tenant_fks` :
+Prisma déclare les relations par clé simple (`eventId → events.id`). Les migrations Phase 4 :
 
-1. Ajoute les contraintes `UNIQUE (organization_id, id)` sur les tables parents.
-2. Remplace les FK simples par des FK composites `(organization_id, <parent_id>)`.
-3. Conserve les index simples nécessaires aux jointures Prisma.
+1. Ajoutent les contraintes `UNIQUE (organization_id, id)` sur les tables parents.
+2. Remplacent les FK simples par des FK composites `(organization_id, <parent_id>)` — 19 au total.
+3. Ajoutent 5 contraintes uniques 3 colonnes et 6 FK 3 colonnes pour la cohérence événementielle (billet, stand, inscription, réservation, check-in).
+4. Conservent les index simples nécessaires aux jointures Prisma.
 
-Cette approche garde le schéma lisible tout en rendant le croisement d'organisations impossible au niveau PostgreSQL. Elle doit être documentée dans la migration, car `prisma migrate diff` peut proposer de revenir aux FK simples.
+Cette approche garde le schéma lisible tout en rendant le croisement d'organisations et d'événements impossible au niveau PostgreSQL.
+
+**Risque de drift Prisma :** `prisma migrate diff` et `prisma db pull` peuvent proposer de revenir aux FK simples, de supprimer les index partiels, les CHECK ou les triggers, car ils ne sont pas représentés dans `schema.prisma`. Ces propositions ne doivent jamais être appliquées telles quelles. Le workflow sûr est :
+
+1. `prisma migrate dev --create-only` pour générer le SQL ;
+2. revue manuelle du SQL ;
+3. `npm run db:check:migrations` — le scanner refuse tout `DROP` non autorisé d'un objet protégé ;
+4. `prisma migrate deploy` ;
+5. `npm run db:verify:integrity` — vérification du catalogue réel.
+
+Les remplacements volontaires de FK sont marqués par une directive `-- integrity-guard: allow DROP CONSTRAINT <nom>` dans la migration concernée. Aucune migration existante n'est réécrite.
 
 ### 6.2 Index partiels — formulation conceptuelle
 
@@ -811,11 +825,13 @@ CREATE UNIQUE INDEX invitations_pending_email_uq
 
 | Trigger | Comportement attendu |
 |---|---|
-| Plafond de remboursement | `SELECT ... FOR UPDATE` sur la transaction ; somme des remboursements + nouveau montant ≤ `transactions.amount` ; sinon exception |
+| Plafond de remboursement | `SELECT ... FOR UPDATE` sur la transaction ; somme des remboursements + nouveau montant ≤ `transactions.amount` ; sinon exception. `search_path = pg_catalog, public` et tables qualifiées `public.` pour résister au masquage par une table temporaire ou un schéma détourné |
 | Immuabilité | Exception sur `UPDATE` et `DELETE` pour `check_ins`, `refunds`, `audit_logs` |
-| `updated_at` | Positionne `updated_at = now()` si la valeur n'a pas changé |
+| `updated_at` | Positionne `updated_at = now()` si la valeur est absente ou identique à l'ancienne ; une valeur explicite différente est respectée |
 
-Les messages d'erreur des triggers sont techniques ; les services traduisent en erreurs métier explicites.
+Le trigger `updated_at` est limité aux 14 tables mutables qui possèdent la colonne. Il n'est jamais installé sur `check_ins`, `refunds` ni `audit_logs`. Une valeur explicite identique à l'ancienne est rafraîchie, car un trigger `BEFORE UPDATE` ne distingue pas une omission d'une valeur fournie identique.
+
+Les messages d'erreur des triggers sont techniques (`check_violation`, `restrict_violation`) ; les services traduisent en erreurs métier explicites.
 
 ---
 
@@ -882,16 +898,19 @@ L'anonymisation d'un participant est une écriture applicative auditée, pas une
 
 | Ordre | Migration | Contenu |
 |---|---|---|
-| 1 | `0001_baseline` | Tables, colonnes, enums, index Prisma |
-| 2 | `0002_extensions` | `citext`, `pg_trgm` |
-| 3 | `0010_partial_uniques` | 6 index partiels |
-| 4 | `0020_tenant_fks` | `UNIQUE (org, id)` et FK composites |
-| 5 | `0030_checks` | CHECK métier |
-| 6 | `0040_refund_cap` | Trigger de plafond |
-| 7 | `0050_immutability` | Triggers append-only |
-| 8 | `0060_touch_updated_at` | Trigger d'horodatage |
-| 9 | `0070_trgm_indexes` | Index de recherche |
-| 10 | `0080_privileges` | Révocation UPDATE/DELETE sur tables immuables |
+| 1 | `20261121225300_init_database_schema` | Tables, colonnes, enums, index Prisma, index partiels, extensions |
+| 2 | `20261121231500_integrity_constraints` | CHECK métier, `UNIQUE (org, id)` et FK composites |
+| 3 | `20261121232000_participant_merge_tenant_fk` | FK composite de fusion des participants |
+| 4 | `20261122100000_api_key_scopes_constraint` | `api_keys.scopes` NOT NULL + CHECK |
+| 5 | `20261122101000_event_integrity_constraints` | Contraintes uniques et FK 3 colonnes de cohérence événementielle (remplace 5 FK 2 colonnes) |
+| 6 | `20261122102000_refund_cap_trigger` | Trigger de plafond cumulatif |
+| 7 | `20261122103000_immutability_triggers` | Triggers append-only |
+| 8 | `20261122104000_touch_updated_at_trigger` | Trigger d'horodatage |
+| 9 | `20261122105000_trgm_indexes` | Index de recherche trigram |
+| 10 | `20261122106000_runtime_privileges` | Rôle groupe runtime et privilèges minimaux |
+| 11 | `20261122107000_refund_cap_search_path` | Durcissement de `enforce_refund_cap()` : `search_path` fixé et qualification `public.` |
+
+Les migrations sont **additives à l'exception des cinq remplacements de FK 2 colonnes par des FK 3 colonnes** dans `20261122101000_event_integrity_constraints`. Ces `DROP CONSTRAINT` sont volontaires, limités et couverts par des directives `-- integrity-guard: allow DROP CONSTRAINT <nom>` ; aucune autre migration existante n'a été réécrite et aucune protection n'a été retirée sans remplacement équivalent ou supérieur.
 
 ### 9.3 Compatibilité
 
@@ -924,7 +943,7 @@ L'anonymisation d'un participant est une écriture applicative auditée, pas une
 ## 11. Points ouverts
 
 - Support officiel du schéma multi-fichiers selon la version Prisma retenue en Phase 4 : repli sur un fichier unique prévu.
-- Maintien des FK simples en parallèle des FK composites : à trancher à l'implémentation (risque de doublons d'index).
+- Maintien des FK simples en parallèle des FK composites : **tranché**. Les FK composites sont conservées seules pour les relations concernées ; aucune FK simple parallèle n'est maintenue. Prisma ne modélisant pas ces contraintes, `prisma migrate diff` propose de les supprimer et de recréer des FK simples : ces propositions ne doivent jamais être appliquées (voir §6.1).
 - Rétention des fichiers d'import et d'audit : non définie en Phase 1.
 - Stratégie exacte de génération UUIDv7 : utilitaire partagé à spécifier en Phase 4.
 

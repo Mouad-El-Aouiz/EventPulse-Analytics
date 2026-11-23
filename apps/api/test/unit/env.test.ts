@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { parseEnv } from '../../src/config/env.schema.js';
 
 const DATABASE_URL = 'postgresql://eventpulse:eventpulse@localhost:5432/eventpulse?schema=public';
+const DATABASE_RUNTIME_URL =
+  'postgresql://eventpulse_runtime:secret@localhost:5432/eventpulse?schema=public';
 
 describe('parseEnv', () => {
   it('accepts a valid configuration', () => {
@@ -11,6 +13,7 @@ describe('parseEnv', () => {
         PORT: '8080',
         LOG_LEVEL: 'debug',
         DATABASE_URL,
+        DATABASE_RUNTIME_URL,
         DATABASE_POOL_SIZE: '7',
       }),
     ).toEqual({
@@ -18,8 +21,30 @@ describe('parseEnv', () => {
       PORT: 8080,
       LOG_LEVEL: 'debug',
       DATABASE_URL,
+      DATABASE_RUNTIME_URL,
       DATABASE_POOL_SIZE: 7,
     });
+  });
+
+  it('requires DATABASE_RUNTIME_URL in production', () => {
+    expect(() => parseEnv({ NODE_ENV: 'production', DATABASE_URL })).toThrow(
+      /DATABASE_RUNTIME_URL/,
+    );
+  });
+
+  it('allows the owner URL fallback outside production', () => {
+    const env = parseEnv({ NODE_ENV: 'development', DATABASE_URL });
+
+    expect(env.DATABASE_RUNTIME_URL).toBeUndefined();
+  });
+
+  it('rejects a non-PostgreSQL DATABASE_RUNTIME_URL', () => {
+    expect(() =>
+      parseEnv({
+        DATABASE_URL,
+        DATABASE_RUNTIME_URL: 'mysql://localhost:3306/eventpulse',
+      }),
+    ).toThrow(/DATABASE_RUNTIME_URL/);
   });
 
   it('applies default values to optional variables', () => {
@@ -79,10 +104,14 @@ describe('parseEnv', () => {
     );
   });
 
-  it.each(['0', '-1', '1.5', 'not-a-number'])(
+  it.each(['0', '-1', '1.5', 'not-a-number', '101'])(
     'rejects an invalid DATABASE_POOL_SIZE: %s',
     (DATABASE_POOL_SIZE) => {
       expect(() => parseEnv({ DATABASE_URL, DATABASE_POOL_SIZE })).toThrow(/DATABASE_POOL_SIZE/);
     },
   );
+
+  it('accepts the maximum DATABASE_POOL_SIZE', () => {
+    expect(parseEnv({ DATABASE_URL, DATABASE_POOL_SIZE: '100' }).DATABASE_POOL_SIZE).toBe(100);
+  });
 });

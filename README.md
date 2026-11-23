@@ -1,12 +1,12 @@
 # EventPulse Analytics
 
-Backend Foundation — Phase 4A.3.1
+Backend Foundation — Phase 4A.3.2
 
 EventPulse Analytics est une plateforme SaaS B2B de gestion événementielle et d'analytique destinée aux organisateurs de salons professionnels, d'expositions, de conférences et de workshops.
 
-La vision produit est de centraliser les données opérationnelles de plusieurs événements dans un référentiel isolé par organisation, de calculer des KPI auditables et de produire des tableaux de bord, rapports et exports. Le backend présent dans ce dépôt constitue uniquement le socle technique de cette plateforme.
+La vision produit est de centraliser les données opérationnelles de plusieurs événements dans un référentiel isolé par organisation, de calculer des KPI auditables et de produire des tableaux de bord, rapports et exports. Le backend présent dans ce dépôt constitue le socle technique de cette plateforme.
 
-> **Statut actuel :** les fonctionnalités métier, la persistance métier, l'authentification, les analytiques et le frontend ne sont pas encore implémentés.
+> **Statut actuel :** le modèle de données métier et ses migrations sont implémentés. Les repositories, les fonctionnalités métier, l'authentification, les analytiques et le frontend ne le sont pas encore.
 
 ## Stack technique
 
@@ -31,7 +31,7 @@ Les versions exactes des dépendances sont définies dans `package.json` et `pac
 | Prisma 5.x     | Intégré      | Client PostgreSQL, génération et connexion                |
 | Docker Compose | Intégré      | Service PostgreSQL de développement                       |
 
-Le modèle métier, les migrations, les repositories, l'authentification et les fonctionnalités métier ne font pas partie de l'état actuel du code.
+Le schéma de données métier et son historique de migrations sont présents. Les repositories, l'authentification et les fonctionnalités métier ne font pas partie de l'état actuel du code.
 
 ## Prérequis
 
@@ -60,7 +60,7 @@ Pour une installation reproductible à partir du lockfile :
 npm ci
 ```
 
-npm installe les dépendances du workspace `@eventpulse/api` depuis la racine du monorepo. Le script `postinstall` du workspace génère ensuite le Prisma Client à partir du schéma minimal, sans nécessiter de base active.
+npm installe les dépendances du workspace `@eventpulse/api` depuis la racine du monorepo. Le script `postinstall` du workspace génère ensuite le Prisma Client à partir du schéma métier, sans nécessiter de base active.
 
 ## Configuration de l'environnement
 
@@ -78,17 +78,23 @@ Copy-Item .env.example .env
 
 Variables prises en charge par le schéma actuel :
 
-| Variable            | Valeurs autorisées                                           | Valeur par défaut |
-| ------------------- | ------------------------------------------------------------ | ----------------- |
-| `NODE_ENV`          | `development`, `test`, `production`                          | `development`     |
-| `PORT`              | Entier de `1` à `65535`                                      | `3000`            |
-| `LOG_LEVEL`         | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `silent` | `info`            |
-| `DATABASE_URL`      | URL PostgreSQL (`postgresql://` ou `postgres://`)            | Obligatoire       |
-| `DATABASE_POOL_SIZE` | Entier supérieur ou égal à `1`                              | `10`              |
+| Variable             | Valeurs autorisées                                           | Valeur par défaut |
+| -------------------- | ------------------------------------------------------------ | ----------------- |
+| `NODE_ENV`           | `development`, `test`, `production`                          | `development`     |
+| `PORT`               | Entier de `1` à `65535`                                      | `3000`            |
+| `LOG_LEVEL`          | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `silent` | `info`            |
+| `DATABASE_URL`       | URL PostgreSQL (`postgresql://` ou `postgres://`)            | Obligatoire       |
+| `DATABASE_RUNTIME_URL` | URL PostgreSQL du login applicatif                         | Oui en production |
+| `DATABASE_POOL_SIZE` | Entier supérieur ou égal à `1`                               | `10`              |
+| `TEST_DATABASE_URL`  | URL PostgreSQL dont le nom de base finit par `_test`         | `eventpulse_test` en local |
 
 Le fichier `.env.example` contient également `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_PORT`, utilisés uniquement par Docker Compose. Le mot de passe fourni est réservé au développement local.
 
 La configuration est validée avec Zod au chargement du module d'environnement, avant le démarrage du serveur. Les variables optionnelles ont une valeur par défaut ; `DATABASE_URL` est obligatoire et une valeur invalide ou hors limites provoque une erreur explicite.
+
+`DATABASE_RUNTIME_URL` est le login applicatif, membre du groupe `eventpulse_app`. En développement, son absence fait retomber l'API sur `DATABASE_URL` (rôle propriétaire). En production, elle est obligatoire : le démarrage échoue sinon, afin de ne pas exécuter l'API avec le rôle de migration. Les migrations et les outils de vérification utilisent toujours `DATABASE_URL`.
+
+`TEST_DATABASE_URL` désigne la base dédiée aux tests d'intégrité. Son nom doit se terminer par `_test` ; le `globalSetup` refuse toute autre base et ne la supprime jamais.
 
 `DATABASE_POOL_SIZE` est appliqué au client Prisma sous la forme du paramètre PostgreSQL `connection_limit`.
 
@@ -105,13 +111,21 @@ Les scripts applicatifs délèguent leur exécution au workspace `@eventpulse/ap
 | `npm run test`           | Exécute la suite Vitest une fois                                |
 | `npm run test:watch`     | Exécute Vitest en mode watch                                    |
 | `npm run test:coverage`  | Exécute les tests avec couverture V8                            |
+| `npm run test:integration` | Exécute les tests d'intégrité PostgreSQL sur `eventpulse_test` |
+| `npm run test:integration:watch` | Exécute les tests d'intégrité en mode watch            |
+| `npm run db:check:migrations` | Scanne les migrations contre les suppressions protégées    |
+| `npm run db:verify:integrity` | Vérifie le catalogue PostgreSQL (FK, index, CHECK, triggers, privilèges) |
 | `npm run lint`           | Analyse le code avec ESLint                                     |
 | `npm run lint:fix`       | Applique les corrections ESLint disponibles                     |
 | `npm run format`         | Formate le code avec Prettier                                   |
 | `npm run format:check`   | Vérifie le formatage sans modifier les fichiers                 |
 | `npm run typecheck`      | Vérifie les types sans générer de fichiers                      |
-| `npm run prisma:generate` | Génère le Prisma Client depuis le schéma minimal               |
+| `npm run prisma:generate` | Génère le Prisma Client depuis `schema.prisma`                 |
 | `npm run prisma:validate` | Valide le schéma Prisma                                        |
+| `npm run prisma:migrate:dev` | Crée et applique une migration en développement           |
+| `npm run prisma:migrate:deploy` | Scanne puis applique les migrations en attente           |
+| `npm run prisma:migrate:status` | Affiche l'état des migrations                          |
+| `npm run prisma:studio`  | Ouvre Prisma Studio pour inspecter les données                  |
 | `npm run db:up`          | Démarre PostgreSQL 16 avec Docker Compose                       |
 | `npm run db:down`        | Arrête PostgreSQL sans supprimer le volume de données           |
 | `npm run db:check`       | Compile puis vérifie la connexion PostgreSQL via Prisma         |
@@ -141,7 +155,12 @@ EventPulse-Analytics/
 │       │   │   └── logger.ts
 │       │   ├── database/
 │       │   │   ├── check-connection.ts
-│       │   │   └── prisma.ts
+│       │   │   ├── check-migrations.ts
+│       │   │   ├── integrity-manifest.ts
+│       │   │   ├── integrity.ts
+│       │   │   ├── migration-safety.ts
+│       │   │   ├── prisma.ts
+│       │   │   └── verify-integrity.ts
 │       │   ├── errors/
 │       │   │   ├── app-error.ts
 │       │   │   ├── problem-details.ts
@@ -166,6 +185,18 @@ EventPulse-Analytics/
 │       │   │   ├── server.test.ts
 │       │   │   ├── supertest.test.ts
 │       │   │   └── validation.test.ts
+│       │   ├── integration/
+│       │   │   ├── global-setup.ts
+│       │   │   ├── helpers/
+│       │   │   ├── schema-integrity.test.ts
+│       │   │   ├── refund-cap.test.ts
+│       │   │   ├── immutability.test.ts
+│       │   │   ├── event-integrity.test.ts
+│       │   │   ├── api-key-scopes.test.ts
+│       │   │   ├── updated-at.test.ts
+│       │   │   ├── privileges.test.ts
+│       │   │   ├── indexes.test.ts
+│       │   │   └── partial-indexes.test.ts
 │       │   └── unit/
 │       │       ├── env-loader.test.ts
 │       │       ├── env.test.ts
@@ -173,6 +204,8 @@ EventPulse-Analytics/
 │       │       ├── logger.test.ts
 │       │       ├── server-import.test.ts
 │       │       ├── database/
+│       │       │   ├── integrity-manifest.test.ts
+│       │       │   ├── migration-safety.test.ts
 │       │       │   └── prisma.test.ts
 │       │       ├── errors/
 │       │       │   ├── app-error.test.ts
@@ -182,15 +215,29 @@ EventPulse-Analytics/
 │       │           ├── pagination.test.ts
 │       │           └── responses.test.ts
 │       ├── prisma/
+│       │   ├── migrations/
+│       │   │   ├── 20261121225300_init_database_schema/
+│       │   │   ├── 20261121231500_integrity_constraints/
+│       │   │   ├── 20261121232000_participant_merge_tenant_fk/
+│       │   │   ├── 20261122100000_api_key_scopes_constraint/
+│       │   │   ├── 20261122101000_event_integrity_constraints/
+│       │   │   ├── 20261122102000_refund_cap_trigger/
+│       │   │   ├── 20261122103000_immutability_triggers/
+│       │   │   ├── 20261122104000_touch_updated_at_trigger/
+│       │   │   ├── 20261122105000_trgm_indexes/
+│       │   │   ├── 20261122106000_runtime_privileges/
+│       │   │   └── migration_lock.toml
 │       │   └── schema.prisma
 │       ├── package.json
 │       ├── tsconfig.build.json
 │       ├── tsconfig.json
-│       └── vitest.config.ts
+│       ├── vitest.config.ts
+│       └── vitest.integration.config.ts
 ├── docs/
 │   ├── phase-1-discovery/
 │   ├── phase-2-ui-ux/
-│   └── phase-3-architecture/
+│   ├── phase-3-architecture/
+│   └── phase-4-implementation/
 ├── .env.example
 ├── .gitattributes
 ├── .gitignore
@@ -213,13 +260,14 @@ EventPulse-Analytics/
 - `index.ts` : expose le nom du service et les informations de runtime. Ce fichier n'est pas le point d'entrée du serveur.
 - `config/` : schéma et chargement de l'environnement, ainsi que la configuration Pino.
 - `database/` : singleton Prisma, cycle de vie de la connexion et contrôle de disponibilité.
-- `prisma/schema.prisma` : schéma Prisma minimal, sans modèle métier à ce stade.
+- `prisma/schema.prisma` : schéma Prisma métier (20 modèles, 25 enums) et migrations versionnées.
+- `prisma/migrations/` : historique SQL versionné, dont les contraintes d'intégrité ajoutées manuellement.
 - `middleware/` : Request ID, logging HTTP, validation Zod des requêtes et traitement centralisé des erreurs.
 - `errors/` : classes `AppError` et `ValidationError`, conversion des erreurs vers le format Problem Details.
 - `http/` : enveloppes de réponses de succès et calculs de pagination réutilisables.
 - `routes/` : composition centralisée des routes, routeur API principal, espace versionné `/api/v1` et routeur de santé.
 - `test/` : tests unitaires et tests HTTP avec Vitest et Supertest.
-- `docs/` : documentation de découverte produit, UX et architecture de conception.
+- `docs/` : documentation de découverte produit, UX, architecture de conception et runbook de durcissement SQL.
 
 ### Composition et versionnement des routes
 
@@ -246,13 +294,66 @@ Le fichier `docker-compose.yml` fournit PostgreSQL 16 avec un volume persistant 
 ```bash
 cp .env.example .env
 npm run db:up
+npm run prisma:migrate:deploy
+npm run db:verify:integrity
 npm run db:check
 npm run db:down
 ```
 
-`npm run db:down` arrête le conteneur sans supprimer le volume `postgres_data`.
+`npm run db:down` arrête le conteneur sans supprimer le volume `postgres_data`. Les commandes Prisma chargent le fichier `.env` racine.
 
-Le schéma `apps/api/prisma/schema.prisma` configure uniquement le provider PostgreSQL et la génération du Prisma Client. Aucun modèle métier, aucune migration et aucun seed ne sont définis à ce stade ; la génération utilise l'option officielle `--allow-no-models`.
+Le schéma `apps/api/prisma/schema.prisma` décrit 20 tables et 25 enums : utilisateurs et sessions, organisations et memberships, invitations et clés API, événements et billets, participants, inscriptions, transactions et remboursements, check-ins, exposants, stands et réservations, imports, exports et journal d'audit. Les identifiants sont des UUID, les montants des `numeric(12,2)`, les emails des `citext` et les horodatages des `timestamptz(3)`.
+
+### Protections SQL
+
+Les tables métier portent `organization_id` et les tables parentes exposent `UNIQUE (organization_id, id)`. Au-delà du schéma Prisma, les migrations ajoutent :
+
+- **19 clés étrangères composites** multi-tenant, dont 6 FK à 3 colonnes qui garantissent la cohérence événementielle des inscriptions, réservations, transactions et check-ins ;
+- **6 index uniques partiels**, dont l'unicité d'une réservation active, d'un check-in valide, d'une transaction par inscription ou réservation et du code de stand après suppression logique ;
+- **25 contraintes `CHECK`**, dont le `NOT NULL` et le `CHECK` littéral de `api_keys.scopes` ;
+- **3 tables immuables** (`check_ins`, `refunds`, `audit_logs`) protégées par triggers `BEFORE UPDATE OR DELETE` ;
+- **plafond cumulatif des remboursements** vérifié sous verrou `FOR UPDATE`, en arithmétique `numeric`, uniquement pour les transactions `PAID` ou `PARTIALLY_REFUNDED` ;
+- **trigger `updated_at`** sur les 14 tables mutables, avec sémantique « si inchangé » ;
+- **5 index trigram GIN**, dont un index d'expression `((email)::text)` pour le `citext` ;
+- **rôle groupe `eventpulse_app`** sans login : `SELECT, INSERT` seulement sur les tables immuables, `SELECT, INSERT, UPDATE, DELETE` sur les tables mutables, aucun `TRUNCATE` (le rôle propriétaire, lui, conserve ce privilège).
+
+Ces objets ne sont pas représentés dans le schéma Prisma : `prisma migrate dev` ou `prisma migrate diff` peut proposer de les supprimer. Ces suggestions ne doivent jamais être appliquées sans revue. `npm run db:check:migrations` refuse toute suppression non autorisée d'un objet protégé, et `npm run db:verify:integrity` vérifie 126 contrôles de catalogue (FK, index, `CHECK`, triggers, privilèges). La fonction de plafond des remboursements s'exécute avec un `search_path` fixé et des tables qualifiées `public.`, ce qui la protège du masquage par une table temporaire. Ces protections s'appliquent au rôle runtime : un propriétaire du schéma ou un superutilisateur peut toujours désactiver un trigger ou supprimer une contrainte, d'où l'obligation de restreindre et revoir ces opérations. Le détail du workflow, des rôles et des limites figure dans `docs/phase-4-implementation/DATABASE_HARDENING_RUNBOOK.md`.
+
+### Workflow des migrations
+
+```bash
+# Après modification du schéma, générer une migration vide puis la relire
+npx prisma migrate dev --create-only --schema apps/api/prisma/schema.prisma --name nom_de_la_migration
+
+# Scanner les suppressions protégées puis appliquer les migrations en attente
+npm run db:check:migrations
+npm run prisma:migrate:status
+npm run prisma:migrate:deploy
+
+# Vérifier le catalogue réel
+npm run db:verify:integrity
+```
+
+`prisma migrate dev` est réservé au développement local et ne doit pas être utilisé sur une base partagée. Les migrations déjà appliquées ne sont jamais modifiées ni supprimées. Le workflow n'utilise ni `prisma db push`, ni reset, ni suppression du volume PostgreSQL. Une correction de protection passe par une nouvelle migration additive, avec une directive `-- integrity-guard: allow DROP …` uniquement lorsqu'un remplacement est réellement voulu.
+
+### Tests d'intégrité PostgreSQL
+
+```bash
+npm run test:integration
+```
+
+Les tests utilisent une base dédiée dont le nom finit par `_test` (`eventpulse_test` par défaut). Le `globalSetup` refuse tout autre nom, crée la base si elle est absente, exécute le scanner puis `prisma migrate deploy`. La base n'est jamais reset, droppée ou truncate.
+
+La suite couvre le manifeste complet et ses identités exactes, la matrice de couverture des 19 FK composites, le plafond et la concurrence des remboursements (avec `SQLSTATE` et neutralisation du `search_path`), l'immuabilité par SQL direct et par Prisma, la cohérence événementielle, les scopes API (`NULL` refusé, doublons et tableau vide acceptés), `updated_at`, les privilèges effectifs du groupe runtime (et, si `TEST_RUNTIME_LOGIN_ROLE` est défini, du login réel), les index trigram et les index partiels. Le scanner de migrations est une analyse lexicale : la revue humaine reste requise pour le SQL dynamique.
+
+Inspection et validation :
+
+```bash
+npm run prisma:validate
+npm run prisma:generate
+npm run prisma:studio
+docker exec -it eventpulse-analytics-postgres-1 psql -U eventpulse -d eventpulse -c '\dt'
+```
 
 Le client Prisma est un singleton créé dans `src/database/prisma.ts`. Le serveur établit la connexion avant d'accepter des requêtes HTTP et ferme la connexion après l'arrêt du serveur. Une connexion impossible empêche le démarrage ; `npm run db:check` connecte Prisma et exécute `SELECT 1` pour vérifier la disponibilité. Les tests unitaires utilisent un client simulé et ne nécessitent pas PostgreSQL.
 
@@ -310,13 +411,19 @@ Le processus n'appelle pas `process.exit()` lors d'un arrêt normal ; il se term
 - endpoint `GET /health` ;
 - serveur HTTP natif avec arrêt gracieux, timeout et gestion des signaux ;
 - PostgreSQL 16 local via Docker Compose ;
+- modèle de données métier Prisma (20 tables, 25 enums) et migrations versionnées ;
+- contraintes d'intégrité SQL : extensions `citext` et `pg_trgm`, contraintes d'unicité partielles, `CHECK`, clés étrangères composites multi-tenant et cohérence événementielle à 3 colonnes ;
+- triggers de plafond de remboursement, d'immuabilité (`check_ins`, `refunds`, `audit_logs`) et de `updated_at` ;
+- index trigram et séparation des privilèges entre rôle de migration et rôle runtime `eventpulse_app` ;
+- vérificateur de catalogue PostgreSQL, scanner de migrations et manifeste d'intégrité ;
+- tests d'intégrité PostgreSQL sur base `_test` dédiée ;
 - Prisma Client, connexion au démarrage, fermeture au shutdown et contrôle `SELECT 1` ;
 - tests unitaires et HTTP avec Vitest et Supertest ;
 - ESLint et Prettier.
 
 ### Non implémenté à ce stade
 
-- modèle de données métier, migrations, seeds et repositories ;
+- seeds, repositories et accès aux données métier ;
 - authentification, autorisation et RBAC ;
 - modules métier (événements, participants, inscriptions, billets, paiements, check-ins, exposants, stands) ;
 - KPI, analytiques, rapports et exports ;
@@ -325,4 +432,4 @@ Le processus n'appelle pas `process.exit()` lors d'un arrêt normal ; il se term
 - frontend ;
 - CI/CD et déploiement.
 
-Les prochaines étapes consistent à construire le modèle de données métier, les repositories, les modules métier et les mécanismes de sécurité sur ce socle. Les documents disponibles sous `docs/` décrivent la conception cible ; ils ne signifient pas que les fonctionnalités correspondantes sont déjà opérationnelles.
+Les prochaines étapes consistent à construire les repositories, les modules métier et les mécanismes de sécurité sur ce socle. Les documents disponibles sous `docs/` décrivent la conception cible ; ils ne signifient pas que les fonctionnalités correspondantes sont déjà opérationnelles.

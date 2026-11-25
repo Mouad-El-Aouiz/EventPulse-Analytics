@@ -281,7 +281,7 @@ sequenceDiagram
     A-->>C: Access JWT 15 min + refresh cookie HttpOnly
     C->>A: GET /auth/me
     A-->>C: profil, organisations, rôle actif, permissions UI
-    C->>A: POST /auth/context (organizationId)
+    C->>A: POST /auth/switch-organization (organizationId)
     A->>DB: Vérifier membership + révoquer/rotation refresh
     A-->>C: Nouvel access JWT lié à l'organisation
 ```
@@ -340,14 +340,14 @@ Le détail du format figure dans `API_DESIGN.md` §7.
 
 | Groupe | Variables | Règles |
 |---|---|---|
-| Application | `NODE_ENV`, `APP_URL`, `API_PORT`, `LOG_LEVEL` | Validées par Zod au démarrage |
-| Base | `DATABASE_URL`, `DATABASE_POOL_MAX` | Secret, jamais loggé |
-| Redis | `REDIS_URL`, `QUEUE_PREFIX` | Prefix par environnement |
-| Auth | `JWT_ACCESS_SECRET`, `JWT_REFRESH_PEPPER`, `ACCESS_TTL`, `REFRESH_TTL` | Secrets ≥ 32 octets |
+| Application | `NODE_ENV`, `PORT`, `LOG_LEVEL`, `TRUST_PROXY_HOPS` | Validées par Zod au démarrage ; nombre exact de proxys, jamais `true` |
+| Base | `DATABASE_URL`, `DATABASE_RUNTIME_URL`, `DATABASE_POOL_SIZE` | Secret, jamais loggé ; le runtime applicatif n'utilise pas le rôle propriétaire |
+| Redis | `REDIS_URL`, `REDIS_KEY_PREFIX` | `REDIS_URL` obligatoire en production ; store mémoire en développement/test |
+| Auth | `JWT_ACCESS_SECRET`, `REFRESH_TOKEN_PEPPER`, `PASSWORD_RESET_TOKEN_PEPPER`, `JWT_ACCESS_TTL_SECONDS`, `REFRESH_SLIDING_TTL_SECONDS`, `SESSION_ABSOLUTE_TTL_SECONDS` | Secrets ≥ 32 caractères ; TTL glissant ≤ TTL absolu |
 | Stockage | `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | Bucket privé |
 | Exports | `EXPORT_URL_TTL_SECONDS=900`, `EXPORT_DEFAULT_RETENTION_DAYS=30` | Valeurs par défaut Phase 1 |
 | Observabilité | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | Optionnel en local |
-| Sécurité | `CORS_ORIGINS`, `RATE_LIMIT_*` | Liste explicite |
+| Sécurité | `CORS_ALLOWED_ORIGINS`, `AUTH_COOKIE_SECURE`, `AUTH_RATE_LIMIT_FAIL_CLOSED`, `AUTH_*_MAX_ATTEMPTS`, `AUTH_LOCKOUT_*` | Allowlist explicite sans joker ; échec fermé en production |
 
 **Règle :** l'application refuse de démarrer si une variable obligatoire est absente ou invalide.
 
@@ -425,7 +425,7 @@ flowchart LR
 | Erreurs | Sentry | Exceptions 5xx, jobs échoués, frontend |
 | Files | BullMQ Board / métriques | Profondeur, échecs, retries, jobs bloqués |
 | Santé | `/health/live`, `/health/ready` | Processus, base, Redis |
-| Audit | `audit_logs` | Actions sensibles, 11 champs |
+| Audit | `audit_logs` | Actions sensibles, 12 champs |
 
 **Interdit dans les logs :** mots de passe, tokens, secrets, clés API en clair, PII brute non nécessaire.
 

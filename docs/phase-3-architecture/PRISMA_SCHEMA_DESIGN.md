@@ -73,7 +73,7 @@ organizationId String  @map("organization_id") @db.Uuid
 - Colonne unique `deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)`.
 - Aucun `deleted` booléen : la date porte l'information et permet l'audit.
 - L'exclusion est appliquée par la couche repository, jamais par un middleware global silencieux.
-- Les contraintes d'unicité concernées sont partielles (`WHERE deleted_at IS NULL`), donc invisibles pour Prisma.
+- Les contraintes d'unicité qui doivent libérer leur clé après suppression logique sont partielles (`WHERE deleted_at IS NULL`), comme le code de stand ; les autres restent globales.
 
 ---
 
@@ -139,7 +139,7 @@ prisma/
 
 - Les valeurs d'enum PostgreSQL ne sont jamais supprimées ni renommées sans migration dédiée : on ajoute uniquement.
 - Les statuts sont mappés tels quels dans le domaine applicatif ; aucune valeur par défaut implicite hors celles documentées.
-- `CheckInReason` reflète exactement les 8 motifs de `BUSINESS_RULES.md` (BR-CHK-004). `EVENT_NOT_FOUND` et `UNKNOWN_PARTICIPANT` couvrent les références absentes.
+- `CheckInReason` reflète exactement les 8 motifs de `BUSINESS_RULES.md` (BR-CHK-004). `EVENT_NOT_FOUND` et `PARTICIPANT_NOT_FOUND` couvrent les références absentes.
 
 ---
 
@@ -150,7 +150,7 @@ prisma/
 ```prisma
 generator client {
   provider        = "prisma-client-js"
-  previewFeatures = ["postgresqlExtensions", "prismaSchemaFolder"]
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
@@ -160,7 +160,7 @@ datasource db {
 }
 ```
 
-> `citext` et `pg_trgm` nécessitent l'extension `postgresqlExtensions`. Si elle n'est pas activée, le type `citext` est remplacé par `text` + index fonctionnel `lower(email)`, et la recherche trigram est abandonnée.
+> `citext` et `pg_trgm` sont installées par la migration initiale et nécessitent l'extension `postgresqlExtensions`. `citext` fournit le type des emails ; `pg_trgm` porte les index de recherche trigram.
 
 ### 5.2 Identité
 
@@ -193,6 +193,7 @@ model Session {
   familyId            String    @map("family_id") @db.Uuid
   refreshTokenHash    String    @unique(map: "sessions_refresh_hash_uq") @map("refresh_token_hash")
   expiresAt           DateTime  @map("expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt   DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
   revokedAt           DateTime? @map("revoked_at") @db.Timestamptz(3)
   replacedBySessionId String?   @unique(map: "sessions_replaced_by_uq") @map("replaced_by_session_id") @db.Uuid
   ipAddress           String?   @map("ip_address") @db.Inet
@@ -756,13 +757,13 @@ Prisma ne modélise pas les index partiels, les CHECK complexes ni les triggers.
 | # | Élément | Migration cible |
 |---|---|---|
 | P-01 | `citext`, `pg_trgm` | `20261121225300_init_database_schema` |
-| P-02 | `UNIQUE (booth_id) WHERE status = 'ACTIVE'` | `20261121225300_init_database_schema` |
-| P-03 | `UNIQUE (organization_id, event_id, participant_id) WHERE status = 'VALID'` sur `check_ins` | `20261121225300_init_database_schema` |
-| P-04 | `UNIQUE (registration_id) WHERE type = 'TICKET'` sur `transactions` | `20261121225300_init_database_schema` |
-| P-05 | `UNIQUE (booth_reservation_id) WHERE type = 'BOOTH'` sur `transactions` | `20261121225300_init_database_schema` |
-| P-06 | `UNIQUE (organization_id, event_id, code) WHERE deleted_at IS NULL` sur `booths` | `20261121225300_init_database_schema` |
-| P-07 | `UNIQUE (organization_id, email) WHERE status = 'PENDING'` sur `invitations` | `20261121225300_init_database_schema` |
-| P-08 | FK composites incluant `organization_id` | `20261121231500_integrity_constraints` |
+| P-02 | `UNIQUE (booth_id) WHERE status = 'ACTIVE'` | `20261121231500_integrity_constraints` |
+| P-03 | `UNIQUE (organization_id, event_id, participant_id) WHERE status = 'VALID'` sur `check_ins` | `20261121231500_integrity_constraints` |
+| P-04 | `UNIQUE (registration_id) WHERE type = 'TICKET'` sur `transactions` | `20261121231500_integrity_constraints` |
+| P-05 | `UNIQUE (booth_reservation_id) WHERE type = 'BOOTH'` sur `transactions` | `20261121231500_integrity_constraints` |
+| P-06 | `UNIQUE (organization_id, event_id, code) WHERE deleted_at IS NULL` sur `booths` | `20261121231500_integrity_constraints` |
+| P-07 | `UNIQUE (organization_id, email) WHERE status = 'PENDING'` sur `invitations` | `20261121231500_integrity_constraints` |
+| P-08 | FK composites 2 colonnes incluant `organization_id` (hors fusion de participants) | `20261121231500_integrity_constraints` |
 | P-09 | CHECK de cohérence (transactions, check-ins, réservations, montants) | `20261121231500_integrity_constraints` |
 | P-10 | Trigger plafond des remboursements (puis durcissement `search_path` et qualification) | `20261122102000_refund_cap_trigger`, `20261122107000_refund_cap_search_path` |
 | P-11 | Triggers d'immuabilité | `20261122103000_immutability_triggers` |
@@ -771,6 +772,7 @@ Prisma ne modélise pas les index partiels, les CHECK complexes ni les triggers.
 | P-14 | `api_keys.scopes` NOT NULL + CHECK | `20261122100000_api_key_scopes_constraint` |
 | P-15 | FK 3 colonnes de cohérence événementielle | `20261122101000_event_integrity_constraints` |
 | P-16 | Rôle groupe runtime et privilèges | `20261122106000_runtime_privileges` |
+| P-17 | Expiration absolue des sessions | `20261123120000_auth_session_absolute_expiry` |
 
 ### 6.1 FK composites et relations Prisma
 
@@ -898,8 +900,8 @@ L'anonymisation d'un participant est une écriture applicative auditée, pas une
 
 | Ordre | Migration | Contenu |
 |---|---|---|
-| 1 | `20261121225300_init_database_schema` | Tables, colonnes, enums, index Prisma, index partiels, extensions |
-| 2 | `20261121231500_integrity_constraints` | CHECK métier, `UNIQUE (org, id)` et FK composites |
+| 1 | `20261121225300_init_database_schema` | Tables, colonnes, enums, index Prisma (dont `UNIQUE (org, id)`), extensions |
+| 2 | `20261121231500_integrity_constraints` | CHECK métier, index partiels uniques et FK composites 2 colonnes |
 | 3 | `20261121232000_participant_merge_tenant_fk` | FK composite de fusion des participants |
 | 4 | `20261122100000_api_key_scopes_constraint` | `api_keys.scopes` NOT NULL + CHECK |
 | 5 | `20261122101000_event_integrity_constraints` | Contraintes uniques et FK 3 colonnes de cohérence événementielle (remplace 5 FK 2 colonnes) |
@@ -909,6 +911,7 @@ L'anonymisation d'un participant est une écriture applicative auditée, pas une
 | 9 | `20261122105000_trgm_indexes` | Index de recherche trigram |
 | 10 | `20261122106000_runtime_privileges` | Rôle groupe runtime et privilèges minimaux |
 | 11 | `20261122107000_refund_cap_search_path` | Durcissement de `enforce_refund_cap()` : `search_path` fixé et qualification `public.` |
+| 12 | `20261123120000_auth_session_absolute_expiry` | `sessions.absolute_expires_at` : ajout nullable, backfill `created_at + 30 jours`, puis `NOT NULL` |
 
 Les migrations sont **additives à l'exception des cinq remplacements de FK 2 colonnes par des FK 3 colonnes** dans `20261122101000_event_integrity_constraints`. Ces `DROP CONSTRAINT` sont volontaires, limités et couverts par des directives `-- integrity-guard: allow DROP CONSTRAINT <nom>` ; aucune autre migration existante n'a été réécrite et aucune protection n'a été retirée sans remplacement équivalent ou supérieur.
 
@@ -935,7 +938,7 @@ Les migrations sont **additives à l'exception des cinq remplacements de FK 2 co
 | `BoothReservation` active unique | BR-EXH-003 |
 | `Import.idempotencyKey` | BR-IMP-004 |
 | `Export.expiresAt` | BR-EXP-002 |
-| `AuditLog` 11 champs | BR-AUD-003 |
+| `AuditLog` 12 champs (catégorie incluse) | BR-AUD-003 |
 | Soft delete | BR-DEL-001 à 004 |
 
 ---

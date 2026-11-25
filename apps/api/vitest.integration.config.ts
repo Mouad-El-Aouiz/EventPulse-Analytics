@@ -12,6 +12,7 @@ dotenv.config({
 
 const databaseUrl = process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL;
 assertSafeTestDatabaseUrl(databaseUrl, process.env);
+const redisUrl = process.env.TEST_REDIS_URL;
 
 export default defineConfig({
   test: {
@@ -21,6 +22,7 @@ export default defineConfig({
       DATABASE_URL: databaseUrl,
       TEST_DATABASE_URL: databaseUrl,
       DATABASE_POOL_SIZE: '5',
+      ...(redisUrl === undefined ? {} : { REDIS_URL: redisUrl }),
     },
     include: ['test/integration/**/*.test.ts'],
     exclude: [...configDefaults.exclude, '**/dist/**', '**/coverage/**'],

@@ -13,6 +13,6 @@ describe('PostgreSQL catalog integrity', () => {
     const report = await verifyDatabaseIntegrity(client);
 
     expect(report.errors).toEqual([]);
-    expect(report.checked).toBe(126);
+    expect(report.checked).toBe(127);
   });
 });

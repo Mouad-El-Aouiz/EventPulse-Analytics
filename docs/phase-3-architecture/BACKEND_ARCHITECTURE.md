@@ -230,7 +230,7 @@ Règles :
 | Dépendances interdites | `analytics`, `finance`, `checkins`, `exhibitors` |
 | Interface publique | `OrganizationsFacade.getActiveMembership`, `assertRole`, `listUserOrganizations`, `getSettings` |
 
-**Règles portées :** dernier OWNER protégé, ADMIN ne modifie pas OWNER, portée des rôles, invitation unique en attente, clé API à scope unique.
+**Règles portées :** dernier OWNER protégé, ADMIN ne modifie pas OWNER, portée des rôles, invitation unique en attente, clé API restreinte à `ingestion:write` ; le `CHECK` SQL laisse passer `{}` et les doublons, à refuser côté service.
 
 ### 4.3 `events`
 
@@ -356,7 +356,7 @@ Règles :
 | Dépendances interdites | Tous les modules métier (sens unique entrant) |
 | Interface publique | `AuditPort.record(event)`, `AuditFacade.list` |
 
-**Règles portées :** 6 catégories, 11 champs, append-only, métadonnées bornées, jamais de secret ni de PII.
+**Règles portées :** 6 catégories, 12 champs, append-only, métadonnées bornées, jamais de secret ni de PII.
 
 ### 4.12 `realtime`
 
@@ -509,10 +509,10 @@ Toutes les erreurs suivent un format unique inspiré de Problem Details :
 
 | Catégorie | Variables |
 |---|---|
-| Runtime | `NODE_ENV`, `PORT`, `API_BASE_URL`, `WEB_ORIGIN` |
-| Base | `DATABASE_URL`, `DATABASE_POOL_SIZE` |
-| Auth | `JWT_ACCESS_SECRET`, `JWT_REFRESH_PEPPER`, `ACCESS_TTL`, `REFRESH_TTL` |
-| Redis | `REDIS_URL` |
+| Runtime | `NODE_ENV`, `PORT`, `LOG_LEVEL`, `TRUST_PROXY_HOPS` |
+| Base | `DATABASE_URL`, `DATABASE_RUNTIME_URL`, `DATABASE_POOL_SIZE` |
+| Auth | `JWT_ACCESS_SECRET`, `REFRESH_TOKEN_PEPPER`, `PASSWORD_RESET_TOKEN_PEPPER`, `JWT_ACCESS_TTL_SECONDS`, `REFRESH_SLIDING_TTL_SECONDS`, `SESSION_ABSOLUTE_TTL_SECONDS` |
+| Redis | `REDIS_URL`, `REDIS_KEY_PREFIX` |
 | Storage | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
 | Mail | `SMTP_URL`, `MAIL_FROM` |
 | Observabilité | `SENTRY_DSN`, `LOG_LEVEL` |

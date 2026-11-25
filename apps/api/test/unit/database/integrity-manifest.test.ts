@@ -40,7 +40,7 @@ describe('integrity manifest', () => {
     expect(UPDATED_AT_TABLES).toHaveLength(14);
     expect(PARTIAL_UNIQUE_INDEXES).toHaveLength(6);
     expect(TRIGRAM_INDEXES).toHaveLength(5);
-    expect(CHECK_CONSTRAINTS).toHaveLength(25);
+    expect(CHECK_CONSTRAINTS).toHaveLength(26);
     expect(UNIQUE_CONSTRAINTS).toHaveLength(5);
     expect(COMPOSITE_FOREIGN_KEYS).toHaveLength(19);
     expect(TRIGGER_FUNCTIONS).toHaveLength(3);

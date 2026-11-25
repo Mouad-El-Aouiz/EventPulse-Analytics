@@ -479,7 +479,7 @@ sequenceDiagram
 
 - Squelettes par page, pas de spinner plein écran.
 - `keepPreviousData` lors d'un changement de filtre pour éviter le clignotement.
-- Progression explicite pour imports et exports : `PENDING`, `PROCESSING`, `COMPLETED`, `FAILED`.
+- Progression explicite pour imports et exports : `PENDING`, `PROCESSING`, `COMPLETED`, `FAILED` ; `EXPIRED` pour un export dont le fichier a expiré.
 - Les jobs asynchrones sont suivis par polling maîtrisé ou Socket.IO, avec repli polling.
 
 ### 11.2 Erreurs

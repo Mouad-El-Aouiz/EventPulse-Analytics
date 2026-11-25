@@ -268,6 +268,19 @@ stateDiagram-v2
 
 La rétention des fichiers d'import et du journal d'audit n'est pas fixée par la Phase 1. Le job correspondant est paramétré mais désactivé par défaut tant que la décision n'est pas prise.
 
+### 6.4 Nettoyage des sessions et tokens (état Phase 4A.4)
+
+Aucun worker de maintenance n'est encore exécuté. Les lignes `sessions` expirées ou révoquées et les `password_reset_tokens` consommés restent donc en base ; elles ne bloquent ni l'authentification ni la rotation, car toutes les lectures filtrent sur `revoked_at IS NULL` et/ou les échéances.
+
+Recommandation, à implémenter dans le futur worker `maintenance` et non dans cette phase :
+
+- supprimer les sessions dont `absolute_expires_at < now() - 30 days` **et** qui ne participent pas à une détection de réutilisation encore utile ;
+- supprimer les `password_reset_tokens` dont `expires_at < now() - 7 days` ;
+- conserver sans purge les lignes liées à une réutilisation détectée (`replaced_by_session_id` non nul, `AUTH_REFRESH_REUSE_DETECTED`) et, plus généralement, toute donnée d'audit ;
+- exécuter la purge par lots bornés, avec verrouillage explicite, journalisation des volumes et idempotence.
+
+Tant que ce worker n'existe pas, la croissance est surveillée par les index existants sur `expires_at`, `family_id` et `user_id`. Aucune suppression manuelle de sessions ou de tokens ne doit être effectuée en production.
+
 ---
 
 ## 7. Retries et erreurs

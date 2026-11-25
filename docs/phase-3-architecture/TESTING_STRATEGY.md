@@ -49,7 +49,7 @@ La couverture de code est un indicateur, jamais une finalité. La priorité est 
 | Élément | Stratégie |
 |---|---|
 | PostgreSQL | Instance Docker locale, base dédiée persistante `eventpulse_test` (suffixe `_test` obligatoire), migrée une fois par exécution. Un conteneur éphémère par exécution est une cible non implémentée. |
-| Redis | Conteneur éphémère par suite de workers |
+| Redis | Service Docker dédié `redis-test` sans volume, opt-in via `TEST_REDIS_URL` ; `describe.skip` explicite si absent |
 | Stockage | Adaptateur mémoire ou MinIO de test |
 | SMTP | Transport mémoire |
 | Horloge | Port `Clock` injecté pour DST et expirations |
@@ -77,6 +77,7 @@ La couverture de code est un indicateur, jamais une finalité. La priorité est 
 - Résolution de période et DST.
 - Neutralisation CSV.
 - Hachage et pseudonymisation (avec clés de test).
+- Authentification : Argon2id, claims et vérification JWT, jetons opaques, rotation de session, expiration glissante et absolue, jetons de réinitialisation, rate limiter et verrouillage progressif, cookies et validation d'origine.
 - Gardes de permissions frontend.
 
 ### 4.2 Règles
@@ -129,6 +130,17 @@ La couverture de code est un indicateur, jamais une finalité. La priorité est 
 | Privilèges runtime | `UPDATE`/`DELETE` refusés sur tables immuables, `UPDATE` mutable autorisé |
 | Index trigram | Définitions `gin_trgm_ops` vérifiées, index email utilisé par `EXPLAIN` |
 | Concurrence remboursement | Deux inserts concurrents de 60 sur 100 : un seul accepté |
+| Connexion inconnue | Hash factice vérifié ; échec générique audité sans PII |
+| Rotation de refresh | Ancien jeton révoqué, nouveau lié à la même famille ; réutilisation révoque la famille |
+| Refresh concurrent | Un seul succès ; le perdant révoque la famille, y compris le jeton gagnant ; réutilisation ultérieure refusée |
+| Expiration absolue | Refresh refusé au-delà de `absolute_expires_at` |
+| Session sans organisation | Refresh rejeté (`AUTH_NO_ACTIVE_MEMBERSHIP`), famille révoquée ; Bearer requis et optionnel rejetés |
+| Réinitialisation | Hash seul stocké, jetons antérieurs invalidés après demande acceptée, usage unique, sessions révoquées |
+| Quota reset par compte | 6e demande refusée silencieusement ; dernier jeton valide toujours utilisable ; aucun nouveau mail |
+| Sélection d'organisation | Multi-appartenance sans choix → 409 ; appartenance étrangère → 403 |
+| Verrouillage login | Compte+IP : l'attaquant se verrouille, la victime depuis une autre IP se connecte ; seuil 5 conservé |
+| Rate limiting | 429 avec `Retry-After` ; verrouillage progressif ; Redis indisponible → 503 en production |
+| Redis réel | Incrément Lua atomique, TTL, extension de verrou sans raccourcissement, fail-closed, recréation après `end` |
 | Dernier OWNER | Désactivation refusée |
 
 ### 5.4 Suite d'intégrité SQL automatisée
@@ -151,7 +163,20 @@ Fichiers :
 - `updated-at.test.ts` — liste exacte des 14 tables, structure du trigger, sémantique « si inchangé », absence sur tables immuables ;
 - `privileges.test.ts` — attributs du rôle, matrice de privilèges, `SET ROLE` réel, contrôle optionnel du login via `TEST_RUNTIME_LOGIN_ROLE` ;
 - `indexes.test.ts` — catalogue trigram et plans `EXPLAIN` (prénom, nom, exposant, événement, email) ;
-- `partial-indexes.test.ts` — les 6 index partiels documentés.
+- `partial-indexes.test.ts` — les 6 index partiels documentés ;
+- `auth.test.ts` — authentification sur PostgreSQL réel : session hachée et audit, sélection et changement d'organisation, compte désactivé après vérification du mot de passe, rotation et réutilisation, refresh concurrent renforcé, verrouillage compte+IP, session sans organisation, logout global, expiration absolue, réinitialisation et quota par compte sans invalidation ;
+- `redis-rate-limit.test.ts` — Redis réel conditionnel : scripts Lua, atomicité sous concurrence, TTL, extension seule, fail-closed sur endpoint indisponible et recréation du client partagé après `end`.
+
+```bash
+# Sans TEST_REDIS_URL : le fichier redis-rate-limit.test.ts est skipped explicitement.
+npm run test:integration
+
+# Avec Redis réel isolé (service redis-test sans volume) :
+docker compose up -d redis-test
+TEST_REDIS_URL=redis://localhost:6380/15 npm run test:integration
+```
+
+Les tests unitaires d'authentification couvrent Argon2id, les services de jetons (claims, audience, UUID, algorithmes, `kid`), sessions, réinitialisation, schémas Zod, plancher de latence forgot, flush d'audit borné, lockout compte+IP, compensation de session, middlewares Bearer sur session sans organisation, rate limiter et store Redis mocké. `test/http/auth-routes.test.ts` vérifie les contrats HTTP, le cookie `ep_rt`, la validation d'origine, l'absence de fuite de jetons et les réponses d'erreur stables.
 
 Les tests unitaires `integrity-manifest.test.ts` et `migration-safety.test.ts` protègent les identités exactes du manifeste (noms, colonnes, définitions, compteurs), le scanner et la protection des index de contraintes uniques, sans PostgreSQL. `test-database-guard.test.ts` couvre les garde-fous de la base de test et les erreurs de création concurrente.
 
@@ -167,6 +192,8 @@ Les tests unitaires `integrity-manifest.test.ts` et `migration-safety.test.ts` p
 - Vérification des montants sérialisés en chaîne.
 - Vérification des réponses `202`, `204`, `302`, `410`.
 - Vérification qu'aucune erreur 500 ne fuit de détail interne.
+- Vérification des cookies d'authentification (`HttpOnly`, `SameSite=Strict`, `Secure`, `Path`), de leur effacement et du refus d'origine sur les opérations à cookie.
+- Vérification que les réponses d'authentification n'exposent ni refresh token, ni hash, ni jeton de réinitialisation.
 
 **Contrats OpenAPI :**
 
@@ -272,7 +299,7 @@ Les 77 règles sont organisées par famille de tests. La matrice 1:1 `règle →
 | BR-ORG | Isolation, rôles, dernier OWNER | Cross-tenant, ADMIN/OWNER |
 | BR-IMP | Sources, aperçu, idempotence | Même fichier deux fois → 409 |
 | BR-EXP | Formats, pseudonymisation, expiration | 410 après expiration |
-| BR-AUD | 6 catégories, 11 champs, append-only | UPDATE refusé |
+| BR-AUD | 6 catégories, 12 champs, append-only | UPDATE refusé |
 | BR-DEL | Soft delete, anonymisation, effacement | Historique comptable conservé, effacement physique conditionnel |
 | BR-KPI | Périodes, dates, N/A, inclusion | Cas de référence |
 | BR-RT | Invalidations uniquement | Aucun KPI dans le payload |

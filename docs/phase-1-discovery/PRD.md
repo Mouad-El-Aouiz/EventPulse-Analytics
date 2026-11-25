@@ -660,7 +660,7 @@ Le produit est organisé en **15 modules** répartis en quatre domaines.
 - Gestion des memberships et des rôles (matrice Annexe A).
 - Paramètres d'organisation : fuseau horaire, devise EUR, rétention des exports.
 - Gestion des API keys : création, rotation, révocation, scopes.
-- **Audit log minimal (Must)** : 6 catégories, 11 champs, UTC, métadonnées bornées, sans secrets ni PII inutile, actions système identifiables, journal protégé en lecture et en écriture.
+- **Audit log minimal (Must)** : 6 catégories, 12 champs, UTC, métadonnées bornées, sans secrets ni PII inutile, actions système identifiables, journal protégé en lecture et en écriture.
 - **Consultation basique de l'audit (Must)** pour OWNER/ADMIN.
 - **Interface d'audit avancée (Should)** : filtres, recherche, exports.
 
@@ -808,7 +808,7 @@ Les événements `COMPLETED` et les transactions financières ne sont jamais sup
 5. **Opérations financières** : création/modification/annulation d'un remboursement, modification manuelle du statut d'une transaction.
 6. **Ingestion** : import de données, appels à l'endpoint d'ingestion.
 
-**11 champs minimaux :** `id`, `timestamp` (UTC), `organization_id`, `actor_user_id` (nullable), `action_type`, `resource_type`, `resource_id`, `result` (`SUCCESS`/`FAILURE`), `metadata` (JSON borné, sans PII brute), `ip_address` (optionnel), `user_agent` (optionnel).
+**12 champs minimaux :** `id`, `created_at` (UTC), `organization_id`, `category`, `actor_user_id` (nullable), `action_type`, `resource_type`, `resource_id`, `result` (`SUCCESS`/`FAILURE`), `metadata` (JSON borné, sans PII brute), `ip_address` (optionnel), `user_agent` (optionnel).
 
 **Règles de sécurité :** jamais de mots de passe, tokens ou valeurs secrètes d'API keys ; seuls un identifiant ou fingerprint d'API key sont conservés ; pas de PII brute inutile ; actions système et workers identifiables ; journal protégé contre les accès et modifications non autorisés.
 
@@ -1251,7 +1251,7 @@ Trois niveaux distincts : soft delete (réversible), anonymisation (irréversibl
 | Q-09 | Matrice 5 rôles × modules × actions approuvée le 2026-11-18 (Annexe A), vérifiée backend |
 | Q-10 | Auto-assignation à la création + assignation/réassignation/retrait OWNER/ADMIN |
 | Q-11 | Viewer lecture seule org-wide ; pas d'export, pas de PII, pas d'admin |
-| Q-12 | Audit minimal Must (6 catégories, 11 champs, UTC, métadonnées bornées, actions système identifiables, API keys par empreinte) ; UI avancée Should |
+| Q-12 | Audit minimal Must (6 catégories, 12 champs, UTC, métadonnées bornées, actions système identifiables, API keys par empreinte) ; UI avancée Should |
 | Q-13.1 | Recent Activity Must, indépendant de l'audit, filtré par permissions |
 | Q-13.2 | DRAFT/CANCELLED exclus ; ARCHIVED inclus dans l'historique ; filtres = dates réelles d'activité |
 | Q-14 | Rétention 30 jours configurable, purge BullMQ, URLs signées, notification = Should |

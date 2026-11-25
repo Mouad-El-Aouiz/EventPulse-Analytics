@@ -178,13 +178,13 @@
 - **Scénario principal :**
   1. L'administrateur ouvre le journal.
   2. Il filtre par catégorie, date, acteur, ressource et résultat.
-  3. Il consulte les 11 champs minimaux.
+  3. Il consulte les 12 champs minimaux.
   4. Il ne voit jamais de secret ni de PII inutile.
 - **Alternatifs :** interface avancée (recherche, export) = Should.
 - **Cas d'erreur :** rôle non autorisé → 403.
 - **GWT :**
   - Given une action sensible, When elle est effectuée, Then une entrée apparaît dans le journal.
-  - Given une entrée, Then elle contient les 11 champs minimaux.
+  - Given une entrée, Then elle contient les 12 champs minimaux.
   - Given un accès Analyst/Viewer, When il tente de consulter l'audit, Then la requête est refusée.
 - **Priorité :** Must (UI avancée : Should). **Règles :** Q-12, BR-AUD-001 à BR-AUD-004. **KPI :** aucun.
 

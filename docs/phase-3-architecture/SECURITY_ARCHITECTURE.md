@@ -87,7 +87,7 @@ Points de contrôle :
 4. Refus si `users.is_active = false` ou membership absent/`DISABLED`.
 5. Création d'une session et d'une famille de refresh.
 6. Journalisation d'audit `AUTH` avec `SUCCESS` ou `FAILURE` (sans mot de passe).
-7. Verrouillage temporaire progressif après échecs répétés (rate limit durable Redis).
+7. Verrouillage temporaire progressif après échecs répétés : seuil configurable (5 par défaut), durée 60 s doublée à chaque palier, plafond 24 h, compteurs Redis atomiques. Le verrouillage est indexé sur **compte + IP** : connaître un email ne suffit pas à rendre le compte indisponible depuis une autre IP. Le quota login par IP+compte (10/15 min) reste en vigueur ; un attaquant distribué peut toujours tenter le mot de passe depuis de nombreuses IP, mais aucune IP unique ne peut verrouiller durablement le compte pour sa victime. Le compte désactivé n'est révélé qu'après une vérification de mot de passe réussie.
 
 ### 2.3 Jetons
 
@@ -108,32 +108,42 @@ Points de contrôle :
 | `jti` | Identifiant unique du jeton |
 | `iat`, `exp` | Émission, expiration |
 | `typ` | `access` |
+| `kid` | Identifiant de clé active |
+| `iss`, `aud` | Émetteur et audience attendus |
 
 **Règles :**
 
 - Le rôle du token n'est **jamais** la seule source d'autorisation : le membership est rechargé à chaque requête.
 - Un token dont `org` ne correspond pas à l'organisation résolue est rejeté (401).
 - Un token `typ != access` est rejeté sur les routes métier.
-- Signature HS256 avec secret fort ; rotation par `kid` possible.
+- Signature HS256 avec secret fort ; la vérification impose l'algorithme HS256, l'émetteur, l'audience, le `kid` actif et la présence de `sub`, `sid`, `org`, `role`, `jti`, `exp` et `iat`. `sub`, `sid`, `org` et `jti` doivent être des UUID canoniques. La rotation de clé s'effectue par changement de `kid` et de secret.
 - Aucune donnée PII dans le JWT.
 
 **Refresh token :**
 
 - Chaîne aléatoire cryptographique, jamais un JWT.
-- Stocké uniquement sous forme de hash (`sessions.refresh_token_hash`).
-- Cookie `ep_rt` : `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/api/v1/auth`.
+- Stocké uniquement sous forme de hash (`sessions.refresh_token_hash`), avec un pepper serveur `REFRESH_TOKEN_PEPPER`.
+- Cookie `ep_rt` : `HttpOnly`, `Secure` en production, `SameSite=Strict`, `Path=/api/v1/auth`.
 - Rotation à chaque usage : nouveau token, ancien révoqué, `replacedBySessionId` renseigné.
 - **Détection de réutilisation :** si un token déjà révoqué est présenté, toute la famille (`familyId`) est révoquée et l'événement est audité `FAILURE`.
 - Un changement d'organisation crée un nouveau couple de jetons dans la même famille et révoque l'ancien.
 - La déconnexion révoque la session courante ; `logout-all` révoque toutes les sessions de l'utilisateur.
+- L'expiration effective est `MIN(now + REFRESH_SLIDING_TTL_SECONDS, sessions.absolute_expires_at)`, avec un plafond absolu `SESSION_ABSOLUTE_TTL_SECONDS` (30 jours par défaut) : le refresh ne peut jamais prolonger une session au-delà.
+- Le nombre de sessions actives par utilisateur est borné ; les plus anciennes sont révoquées.
+- Deux refresh concurrents avec le même jeton ne produisent qu'un succès. Le perdant est traité comme un rejeu et révoque toute la famille, y compris la session gagnante. La protection est conservée telle quelle ; le frontend devra sérialiser ses refresh (single-flight). Ce compromis sécurité/UX est documenté et testé côté backend.
+- `sessions.organization_id` reste nullable transitoirement. Une session dont l'organisation est nulle est rejetée par le refresh, qui révoque sa famille, et par les middlewares Bearer requis ou optionnels. Aucune migration `NOT NULL` n'est faite avant l'analyse du module Organizations.
 
 ### 2.4 Réinitialisation de mot de passe
 
-- Token aléatoire 256 bits, stocké haché, expiration 30 minutes, usage unique.
-- Réponse toujours identique, que l'email existe ou non.
+- Token aléatoire 256 bits, stocké haché avec `PASSWORD_RESET_TOKEN_PEPPER`, expiration 30 minutes, usage unique.
+- Une nouvelle demande **acceptée** invalide les jetons précédents non utilisés du même utilisateur. Une demande refusée par le quota par compte retourne avant toute recherche utilisateur et avant `PasswordResetService.request()` : aucun jeton valide n'est invalidé.
+- Réponse toujours identique, que l'email existe, soit inconnu, désactivé ou throttlé. Un plancher de latence de 250 ms (0 ms dans les tests unitaires) réduit les écarts entre chemins actifs et non actifs ; il ne garantit pas une égalité temporelle absolue et ne remplace pas une file asynchrone.
 - L'utilisation révoque toutes les sessions existantes.
 - L'événement est audité sans révéler le token.
 - Aucun lien de réinitialisation n'est journalisé.
+- Le lien est remis à `MailPort` ; `NullMailPort` échoue explicitement en production **avant** la création du jeton, plutôt que de simuler un envoi. Aucun faux jeton ni faux succès d'envoi n'est produit. La réponse HTTP reste un `204` générique pour l'anti-énumération et ne garantit pas la livraison.
+- L'absence de fournisseur mail est visible via `GET /health/ready` (`passwordResetEmail.deliveryEnabled=false`, `provider=none`, `reason=no_provider_configured`) et un avertissement structuré au démarrage. Le processus reste prêt ; il ne s'agit pas d'une indisponibilité totale de l'API.
+- Limite assumée : un quota par compte peut être épuisé par un tiers connaissant l'email, retardant l'envoi de nouveaux liens sans invalider le dernier jeton valide. Ce compromis anti-énumération/anti-abus n'est pas résolu par une file dans cette phase.
 
 ### 2.5 Invitations
 
@@ -316,24 +326,27 @@ Pour OWNER/ADMIN, la portée est l'organisation entière.
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
 | `X-Frame-Options` | `DENY` |
 | `Permissions-Policy` | Fonctionnalités non utilisées désactivées |
-| CORS | Origine frontend explicite, `credentials: true` |
-| CSRF | `SameSite=Strict` + vérification d'origine sur `/auth/refresh` |
+| CORS | Allowlist explicite via `CORS_ALLOWED_ORIGINS`, `credentials: true`, aucun joker |
+| CSRF | `SameSite=Strict` + vérification d'origine sur `/auth/refresh` et sur tout logout par cookie |
 
-Le refresh token étant un cookie, `/auth/refresh` vérifie l'origine et ne retourne jamais de contenu sensible en cas d'échec.
+Le refresh token étant un cookie, `/auth/refresh` vérifie l'origine et ne retourne jamais de contenu sensible en cas d'échec. `TRUST_PROXY_HOPS` fixe le nombre exact de proxys de confiance afin que l'IP utilisée par le rate limiting ne soit pas usurpable ; la valeur booléenne `true` est refusée.
 
 ### 6.4 Rate limiting
 
-| Route | Limite indicative |
+| Route | Limite |
 |---|---|
-| `POST /auth/login` | 10 / 15 min / IP + identifiant |
-| `POST /auth/password/forgot` | 5 / heure / IP |
+| `POST /auth/login` | 10 / 15 min / IP + identifiant haché |
+| `POST /auth/password/forgot` | 5 / heure / IP et 5 / heure / compte |
 | `POST /auth/refresh` | 60 / heure / session |
 | Routes utilisateur | 300 / min / utilisateur |
+| Verrouillage progressif | seuil 5 échecs, 60 s puis doublement, plafond 24 h, portée compte + IP |
 | API ingestion | 60 / min / clé |
 | Création d'export | 10 / heure / utilisateur |
 | Upload | 20 / heure / organisation |
 
-Les limites sont configurables ; Redis porte les compteurs distribués.
+Les limites sont configurables (`AUTH_LOGIN_*`, `AUTH_FORGOT_*`, `AUTH_REFRESH_*`, `AUTH_LOCKOUT_*`) ; Redis porte les compteurs atomiques et distribués, avec des identifiants hachés et préfixés. En production, `REDIS_URL` est obligatoire et une indisponibilité Redis produit `503 AUTH_REDIS_UNAVAILABLE` (`AUTH_RATE_LIMIT_FAIL_CLOSED=true`) au lieu de désactiver silencieusement les protections. En développement et en test, un store mémoire est utilisé en l'absence de Redis. `AUTH_RATE_LIMIT_FAIL_CLOSED=false` est rejeté au démarrage en production.
+
+L'écriture d'audit d'authentification est best-effort et ne bloque pas la réponse : un échec est journalisé avec des champs nettoyés (`errorName`, `errorCode`, `statusCode`) sans message brut en production. Les événements qui exigent une organisation résolvable (`audit_logs.organization_id NOT NULL`) sont ignorés avec un avertissement lorsqu'aucune organisation ne peut être déterminée, par exemple un échec de connexion pour un compte sans appartenance active ; aucune ligne anonyme n'est créée. Les événements de succès sont écrits avant la réponse, tandis que les échecs de connexion et les demandes de réinitialisation sont écrits en arrière-plan. Lors de l'arrêt gracieux, ces écritures sont attendues avec un timeout borné (3 s par défaut) avant la fermeture de Prisma ; un timeout ou un échec est journalisé (`Auth audit flush timed out` / `Auth audit flush failed`) avec le nombre d'audits encore en attente, sans secret. L'audit reste best-effort en cas d'arrêt brutal ou de panne durable de la base : il n'existe ni Outbox ni tenant système, et cette limite d'atomicité est assumée.
 
 ### 6.5 Uploads
 
@@ -362,7 +375,7 @@ Les limites sont configurables ; Redis porte les compteurs distribués.
 | Format | Préfixe lisible + secret aléatoire 256 bits |
 | Stockage | Hash SHA-256 avec pepper serveur |
 | Affichage | Une seule fois, à la création |
-| Scope | `ingestion:write` uniquement |
+| Scope | `ingestion:write` uniquement ; contrôle applicatif requis pour refuser `{}` et les doublons, acceptés par le `CHECK` SQL |
 | Expiration | Optionnelle |
 | Révocation | Immédiate |
 | Traçabilité | `last_used_at`, audit de création/révocation |
@@ -407,7 +420,7 @@ Règles :
 ### 8.2 Journal d'audit
 
 - 6 catégories : `AUTH`, `USERS_ROLES`, `ORGANIZATION`, `SENSITIVE_DATA`, `FINANCIAL`, `INGESTION`.
-- 11 champs : identifiant, organisation, catégorie, acteur, type d'action, type de ressource, identifiant de ressource, résultat, métadonnées, IP, user-agent (horodatage UTC inclus).
+- 12 champs : identifiant, organisation, catégorie, acteur, type d'action, type de ressource, identifiant de ressource, résultat, métadonnées, IP, user-agent, horodatage UTC.
 - `SUCCESS` ou `FAILURE`.
 - Append-only, triggers et privilèges.
 - Métadonnées ≤ 8 Ko, sans secret ni PII brute.
@@ -498,7 +511,7 @@ Aucune procédure contractuelle, SLA ou notification réglementaire n'est défin
 | Access + refresh rotation | PRD §18.4 |
 | RBAC serveur | PRD §18.2 |
 | API keys scopées | PRD §18.4, A.8 |
-| Audit 6 catégories / 11 champs | PRD §18.3, BR-AUD-003 |
+| Audit 6 catégories / 12 champs | PRD §18.3, BR-AUD-003 |
 | Exports pseudonymisés | H-09, A.10 |
 | 410 export expiré | Q-14 |
 | Isolation multi-tenant | PRD §18.1, BR-ORG-003 |

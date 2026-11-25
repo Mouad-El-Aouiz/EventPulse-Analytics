@@ -16,5 +16,19 @@ services:
       retries: 10
       start_period: 5s
 
+  # Disposable Redis dedicated to integration tests. It intentionally has no
+  # volume: rate-limit keys must not survive a container recreation.
+  redis-test:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '${REDIS_TEST_PORT:-6380}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+
 volumes:
   postgres_data:

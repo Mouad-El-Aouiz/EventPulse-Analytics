@@ -375,6 +375,11 @@ export const CHECK_CONSTRAINTS: CheckConstraint[] = [
     definition: 'CHECK ((amount > (0)::numeric))',
   },
   {
+    name: 'sessions_expiry_within_absolute_chk',
+    table: 'sessions',
+    definition: 'CHECK ((expires_at <= absolute_expires_at))',
+  },
+  {
     name: 'refunds_currency_chk',
     table: 'refunds',
     definition: "CHECK ((currency = 'EUR'::bpchar))",

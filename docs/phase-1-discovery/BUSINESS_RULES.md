@@ -538,8 +538,8 @@
 - **Source :** Q-12 (validée).
 
 ### BR-AUD-003 — Champs minimaux
-- **Description :** chaque entrée possède 11 champs.
-- **Champs :** `id`, `timestamp` (UTC), `organization_id`, `actor_user_id` (nullable), `action_type`, `resource_type`, `resource_id`, `result` (`SUCCESS`/`FAILURE`), `metadata` (JSON borné), `ip_address` (optionnel), `user_agent` (optionnel).
+- **Description :** chaque entrée possède 12 champs.
+- **Champs :** `id`, `created_at` (UTC), `organization_id`, `category`, `actor_user_id` (nullable), `action_type`, `resource_type`, `resource_id`, `result` (`SUCCESS`/`FAILURE`), `metadata` (JSON borné), `ip_address` (optionnel), `user_agent` (optionnel).
 - **Contraintes :** `metadata` ne contient ni secret ni PII brute.
 - **Cas limites :** un acteur système laisse `actor_user_id` nul mais identifie le worker dans `metadata`.
 - **Impact KPI :** aucun.

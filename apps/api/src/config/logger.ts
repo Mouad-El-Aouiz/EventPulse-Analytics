@@ -1,4 +1,5 @@
 import pino, { type DestinationStream, type Logger, type LoggerOptions } from 'pino';
+import { errorLogFields } from '../errors/error-logging.js';
 import { env } from './env.js';
 
 const SERVICE_NAME = 'EventPulse Analytics API';
@@ -33,6 +34,9 @@ const loggerOptions = {
   redact: {
     paths: redactPaths,
     censor: '[REDACTED]',
+  },
+  serializers: {
+    err: (error: unknown) => errorLogFields(error),
   },
 } satisfies LoggerOptions;
 

@@ -18,10 +18,10 @@
 | Clé primaire | `id uuid`, généré côté application ou `gen_random_uuid()` |
 | Horodatage | `timestamptz(3)`, toujours UTC |
 | Montants | `numeric(12,2)` ; devise `char(3)` limitée à `EUR` en V1 |
-| Booléens | `boolean NOT NULL DEFAULT false` |
+| Booléens | `boolean NOT NULL`, valeur par défaut explicite (`false`, sauf `users.is_active` à `true`) |
 | Multi-tenant | `organization_id uuid NOT NULL` sur toute entité métier |
 | Soft delete | `deleted_at timestamptz NULL` uniquement sur les entités éligibles |
-| Timestamps | `created_at`, `updated_at` sur les entités mutables |
+| Timestamps | `created_at` sur toutes les tables ; `updated_at` sur les 14 entités mutables qui le portent |
 | Immuabilité | `check_ins`, `refunds`, `audit_logs` : ni update ni delete |
 | Emails | `citext` pour l'insensibilité à la casse, sans contrainte d'unicité pour les participants |
 | Identifiants référencés | UUID ; `resource_id` d'audit en `text` pour accepter les références externes |
@@ -47,7 +47,7 @@
 | Asynchrone | `imports`, `exports` |
 | Traçabilité | `audit_logs` |
 
-**Total : 20 tables.** Aucune table de cache, de snapshot KPI ou de file persistée n'est ajoutée : Redis/BullMQ couvre les files, PostgreSQL reste la source de vérité métier.
+**Total : 20 tables métier**, hors table technique `_prisma_migrations` gérée par Prisma. Aucune table de cache, de snapshot KPI ou de file persistée n'est ajoutée : Redis/BullMQ couvre les files, PostgreSQL reste la source de vérité métier.
 
 ### 2.2 Choix structurants
 
@@ -120,6 +120,7 @@ erDiagram
         uuid family_id
         text refresh_token_hash UK
         timestamptz expires_at
+        timestamptz absolute_expires_at
         timestamptz revoked_at
     }
 ```
@@ -318,7 +319,8 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `organization_id` | uuid | N | FK `organizations.id` ; contexte actif ; null avant sélection |
 | `family_id` | uuid | NN | Famille de rotation pour détection de réutilisation |
 | `refresh_token_hash` | text | NN | Unique ; jamais en clair |
-| `expires_at` | timestamptz(3) | NN | Expiration du refresh |
+| `expires_at` | timestamptz(3) | NN | Expiration glissante du refresh |
+| `absolute_expires_at` | timestamptz(3) | NN | Plafond absolu de la session ; l'expiration effective est le minimum des deux |
 | `revoked_at` | timestamptz(3) | N | Révocation |
 | `replaced_by_session_id` | uuid | N | FK `sessions.id` ; chaîne de rotation |
 | `ip_address` | inet | N | Contexte de connexion |
@@ -327,7 +329,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `last_used_at` | timestamptz(3) | N | Dernier refresh |
 
 **Index :** unique `refresh_token_hash` ; `(user_id, revoked_at)` ; `(family_id)` ; `(expires_at)`.
-**Règles :** une réutilisation d'un token révoqué révoque toute la famille. Le changement d'organisation crée une nouvelle session dans la même famille et révoque l'ancienne.
+**Règles :** une réutilisation d'un token révoqué révoque toute la famille. Le changement d'organisation crée une nouvelle session dans la même famille et révoque l'ancienne. La rotation repousse `expires_at` sans jamais dépasser `absolute_expires_at`, renseigné à la création de la session (30 jours par défaut).
 
 ### 4.3 `password_reset_tokens`
 
@@ -443,7 +445,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 - `CHECK (check_in_opens_offset_minutes <= check_in_closes_offset_minutes)`.
 - `UNIQUE (organization_id, id)` pour les FK composites.
 - FK composite `(organization_id, manager_membership_id)` → `memberships(organization_id, id)`.
-**Index :** `(organization_id, status, start_at)` ; `(organization_id, type)` ; `(organization_id, manager_membership_id)` ; index partiel `deleted_at IS NULL`.
+**Index :** `(organization_id, status, start_at)` ; `(organization_id, type)` ; `(organization_id, manager_membership_id)` ; index GIN trigram `events_name_trgm_idx`.
 **Règles :** le manager doit être un membership actif de la même organisation et de rôle `EVENT_MANAGER` ; le rôle est vérifié côté service. Un événement a au plus un manager responsable. Lors d'une réassignation, `manager_membership_id` est remplacé : l'ancien responsable perd l'affectation et le nouveau devient l'unique responsable. Transitions `DRAFT → PUBLISHED → ONGOING → COMPLETED → ARCHIVED`, annulation possible depuis `DRAFT`/`PUBLISHED`/`ONGOING` ; `CANCELLED` et `ARCHIVED` sont terminaux ; `ONGOING`, `COMPLETED` et `ARCHIVED` ne sont jamais supprimés ; `ARCHIVED` reste inclus dans l'historique analytique et exclu des vues de performance courante.
 
 ### 4.9 `tickets`
@@ -461,7 +463,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `deleted_at` | timestamptz(3) | N | Soft delete |
 
 **Contraintes :** `UNIQUE (organization_id, id)`.
-**Index :** `(organization_id, event_id)` où `deleted_at IS NULL`.
+**Index :** `(organization_id, event_id)` ; index unique `(organization_id, event_id, id)` pour la cohérence événementielle.
 **Règles :** suppression uniquement sans inscription ; le prix est figé dans la transaction au moment de sa création.
 
 ### 4.10 `participants`
@@ -487,7 +489,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `deleted_at` | timestamptz(3) | N | Soft delete / participant absorbé |
 
 **Contraintes :** `UNIQUE (organization_id, id)` ; `CHECK (merged_into_participant_id <> id)`.
-**Index :** `(organization_id, email)` ; `(organization_id, last_name, first_name)` ; `(organization_id, country, region, city)` ; index partiel `(organization_id) WHERE deleted_at IS NULL` ; index trigram optionnel sur `last_name`, `first_name`, `email`.
+**Index :** `(organization_id, email)` ; `(organization_id, last_name, first_name)` ; `(organization_id, country, region, city)` ; index GIN trigram `participants_first_name_trgm_idx`, `participants_last_name_trgm_idx` et `participants_email_trgm_idx` (expression `((email)::text)`).
 **Règles :** email non unique ; fusion complète et auditée ; un participant fusionné n'est plus actif ; anonymisation et effacement définitif sont irréversibles et distincts.
 
 ### 4.11 `registrations`
@@ -596,7 +598,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `deleted_at` | timestamptz(3) | N | Soft delete |
 
 **Contraintes :** `UNIQUE (organization_id, id)`.
-**Index :** `(organization_id, name)` ; partiel `deleted_at IS NULL`.
+**Index :** `(organization_id, name)` ; index GIN trigram `exhibitors_name_trgm_idx`.
 **Règles :** un exposant peut réserver plusieurs stands et participer à plusieurs événements.
 
 ### 4.16 `booths`
@@ -617,7 +619,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `deleted_at` | timestamptz(3) | N | Soft delete |
 
 **Contraintes :** `UNIQUE (organization_id, id)` ; index partiel unique `(organization_id, event_id, code) WHERE deleted_at IS NULL`.
-**Index :** `(organization_id, event_id, status, zone)` ; partiel `deleted_at IS NULL`.
+**Index :** `(organization_id, event_id, status, zone)`.
 **Règles :** `UNAVAILABLE` non réservable et exclu du dénominateur d'occupation ; un stand réservé ne peut pas devenir indisponible sans libération.
 
 ### 4.17 `booth_reservations`
@@ -862,7 +864,7 @@ Conséquences :
 
 - Aucun index sur les colonnes peu sélectives seules (`status`, `type`).
 - Les index composites placent `organization_id` en première position.
-- Les index partiels excluent `deleted_at IS NOT NULL` lorsque pertinent.
+- Les index uniques partiels libèrent l'unicité après suppression logique lorsque la règle métier l'exige (code de stand, invitation en attente).
 - Chaque index est justifié par une requête de liste, de KPI ou de purge.
 - Les index sont vérifiés par `EXPLAIN (ANALYZE, BUFFERS)` sur le jeu de 50k inscriptions.
 
@@ -960,7 +962,7 @@ Les migrations sont versionnées et revues ; aucune migration destructive n'est 
 | Réservation active unique | BR-EXH-003 |
 | `imports.idempotency_key` | BR-IMP-004, Q-06 |
 | `exports.expires_at` | BR-EXP-001/002, Q-14 |
-| `audit_logs` 11 champs | BR-AUD-003, PRD §18.3 |
+| `audit_logs` 12 champs (catégorie incluse) | BR-AUD-003, PRD §18.3 |
 | Soft delete / rétention | BR-DEL-001 à 004 |
 | 24 KPI | `KPI_DEFINITIONS.md` |
 | Isolation multi-org | BR-ORG-003, PRD §18.1 |

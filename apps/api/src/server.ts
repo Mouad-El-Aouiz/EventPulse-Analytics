@@ -6,8 +6,14 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger as defaultLogger } from './config/logger.js';
 import { createPrismaDatabase, type DatabaseLifecycle } from './database/prisma.js';
+import { errorLogFields } from './errors/error-logging.js';
+import { flushAuthAudits } from './modules/auth/auth.module.js';
+import type { AuditFlushResult } from './modules/auth/auth.service.js';
+import { getPasswordResetEmailStatus } from './shared/mail/mail-status.js';
+import { closeSharedRedis } from './shared/redis/redis-connection.js';
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
+const DEFAULT_AUDIT_FLUSH_TIMEOUT_MS = 3_000;
 const DEFAULT_SHUTDOWN_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
 
 const SERVER_STARTED_MESSAGE = 'HTTP server started';
@@ -23,6 +29,12 @@ const DATABASE_CONNECTED_MESSAGE = 'Database connection established';
 const DATABASE_CONNECTION_FAILED_MESSAGE = 'Database connection failed';
 const DATABASE_DISCONNECTED_MESSAGE = 'Database connection closed';
 const DATABASE_DISCONNECT_FAILED_MESSAGE = 'Database disconnection failed';
+const REDIS_DISCONNECTED_MESSAGE = 'Redis connection closed';
+const REDIS_DISCONNECT_FAILED_MESSAGE = 'Redis disconnection failed';
+const PASSWORD_RESET_EMAIL_DISABLED_MESSAGE = 'Password reset email delivery is disabled';
+const AUDIT_FLUSH_COMPLETED_MESSAGE = 'Auth audit flush completed';
+const AUDIT_FLUSH_TIMED_OUT_MESSAGE = 'Auth audit flush timed out';
+const AUDIT_FLUSH_FAILED_MESSAGE = 'Auth audit flush failed';
 
 export interface ServerHandle {
   readonly server: Server;
@@ -35,6 +47,8 @@ export interface StartServerOptions {
   logger?: Logger;
   shutdownTimeoutMs?: number;
   database?: DatabaseLifecycle;
+  flushAudits?: (timeoutMs: number) => Promise<AuditFlushResult>;
+  auditFlushTimeoutMs?: number;
 }
 
 export interface SignalTarget {
@@ -53,6 +67,8 @@ interface ServerLifecycleOptions {
   port: number;
   shutdownTimeoutMs: number;
   database?: DatabaseLifecycle;
+  flushAudits?: (timeoutMs: number) => Promise<AuditFlushResult>;
+  auditFlushTimeoutMs: number;
 }
 
 function listen(server: Server, port: number): Promise<void> {
@@ -103,7 +119,39 @@ async function disconnectDatabase(
     await database.disconnect();
     logger.info({ port }, DATABASE_DISCONNECTED_MESSAGE);
   } catch (error) {
-    logger.error({ err: error, port }, DATABASE_DISCONNECT_FAILED_MESSAGE);
+    logger.error({ ...errorLogFields(error), port }, DATABASE_DISCONNECT_FAILED_MESSAGE);
+  }
+}
+
+async function flushAuditTrail(
+  flushAudits: ((timeoutMs: number) => Promise<AuditFlushResult>) | undefined,
+  logger: Logger,
+  port: number,
+  timeoutMs: number,
+): Promise<void> {
+  if (flushAudits === undefined) {
+    return;
+  }
+
+  try {
+    const result = await flushAudits(timeoutMs);
+
+    if (result.drained) {
+      logger.info({ port }, AUDIT_FLUSH_COMPLETED_MESSAGE);
+    } else {
+      logger.warn({ port, pending: result.pending, timeoutMs }, AUDIT_FLUSH_TIMED_OUT_MESSAGE);
+    }
+  } catch (error) {
+    logger.error({ ...errorLogFields(error), port }, AUDIT_FLUSH_FAILED_MESSAGE);
+  }
+}
+
+async function disconnectRedis(logger: Logger, port: number): Promise<void> {
+  try {
+    await closeSharedRedis();
+    logger.info({ port }, REDIS_DISCONNECTED_MESSAGE);
+  } catch (error) {
+    logger.error({ ...errorLogFields(error), port }, REDIS_DISCONNECT_FAILED_MESSAGE);
   }
 }
 
@@ -111,7 +159,7 @@ function createServerHandle(server: Server, options: ServerLifecycleOptions): Se
   let shutdownPromise: Promise<void> | undefined;
 
   const onServerError = (error: Error): void => {
-    options.logger.error({ err: error, port: options.port }, SERVER_ERROR_MESSAGE);
+    options.logger.error({ ...errorLogFields(error), port: options.port }, SERVER_ERROR_MESSAGE);
   };
 
   server.on('error', onServerError);
@@ -146,13 +194,23 @@ function createServerHandle(server: Server, options: ServerLifecycleOptions): Se
           server.off('error', onServerError);
 
           if (error) {
-            options.logger.error({ err: error, port: options.port }, SHUTDOWN_FAILED_MESSAGE);
+            options.logger.error(
+              { ...errorLogFields(error), port: options.port },
+              SHUTDOWN_FAILED_MESSAGE,
+            );
           } else {
             options.logger.info({ port: options.port }, SHUTDOWN_COMPLETED_MESSAGE);
           }
 
           void (async () => {
+            await flushAuditTrail(
+              options.flushAudits,
+              options.logger,
+              options.port,
+              options.auditFlushTimeoutMs,
+            );
             await disconnectDatabase(options.database, options.logger, options.port);
+            await disconnectRedis(options.logger, options.port);
             resolve();
           })();
         });
@@ -171,13 +229,21 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
   const requestedPort = env.PORT;
   const server = createServer(app);
   const database = options.database;
+  const passwordResetEmail = getPasswordResetEmailStatus();
+
+  if (!passwordResetEmail.deliveryEnabled) {
+    logger.warn(
+      { port: requestedPort, ...passwordResetEmail },
+      PASSWORD_RESET_EMAIL_DISABLED_MESSAGE,
+    );
+  }
 
   if (database !== undefined) {
     try {
       await database.connect();
       logger.info(DATABASE_CONNECTED_MESSAGE);
     } catch (error) {
-      logger.fatal({ err: error }, DATABASE_CONNECTION_FAILED_MESSAGE);
+      logger.fatal(errorLogFields(error), DATABASE_CONNECTION_FAILED_MESSAGE);
       throw error;
     }
   }
@@ -185,7 +251,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
   try {
     await listen(server, requestedPort);
   } catch (error) {
-    logger.fatal({ err: error, port: requestedPort }, SERVER_START_FAILED_MESSAGE);
+    logger.fatal({ ...errorLogFields(error), port: requestedPort }, SERVER_START_FAILED_MESSAGE);
     await disconnectDatabase(database, logger, requestedPort);
     throw error;
   }
@@ -195,6 +261,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Ser
     port: getListeningPort(server),
     shutdownTimeoutMs: options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
     database,
+    flushAudits: options.flushAudits ?? flushAuthAudits,
+    auditFlushTimeoutMs: options.auditFlushTimeoutMs ?? DEFAULT_AUDIT_FLUSH_TIMEOUT_MS,
   });
 
   logger.info({ port: handle.port }, SERVER_STARTED_MESSAGE);
@@ -233,7 +301,7 @@ export function registerShutdownHandlers(
       void handle
         .shutdown(`signal:${signal}`)
         .catch((error: unknown) => {
-          logger.error({ err: error, signal }, SHUTDOWN_FAILED_MESSAGE);
+          logger.error({ ...errorLogFields(error), signal }, SHUTDOWN_FAILED_MESSAGE);
         })
         .finally(cleanup);
     };

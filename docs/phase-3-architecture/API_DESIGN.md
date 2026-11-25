@@ -226,10 +226,17 @@ Format unique Problem Details :
 
 **Notes :**
 
-- `/auth/refresh` lit un cookie `HttpOnly`, `Secure`, `SameSite=Strict` ; il ne prend pas de body.
+- `/auth/refresh` lit un cookie `HttpOnly`, `Secure` en production, `SameSite=Strict`, limité au chemin `/api/v1/auth` ; il ne prend pas de body et vérifie l'en-tête `Origin`.
+- Deux refresh simultanés avec le même token : un seul aboutit ; l'autre est traité comme réutilisation et révoque la famille, y compris le token gagnant. Le frontend doit sérialiser (single-flight) ses refresh.
 - La réponse de login contient l'access token et l'utilisateur, jamais le refresh token en clair.
 - `POST /auth/switch-organization` vérifie un membership `ACTIVE`.
-- Les échecs de connexion sont rate-limités et audités sans révéler l'existence de l'email.
+- `POST /auth/logout` accepte un bearer ou, à défaut, le cookie de refresh avec validation d'origine.
+- Les échecs de connexion sont rate-limités et audités sans révéler l'existence de l'email ; le verrouillage progressif est compté par compte **et** par IP afin qu'un attaquant ne puisse pas verrouiller durablement une victime.
+- Les sessions ont une expiration glissante de 7 jours plafonnée par une expiration absolue de 30 jours ; le listing des sessions est borné et n'expose aucun secret.
+- `POST /auth/password/forgot` renvoie toujours `204`, même pour un email inconnu ; le quota par compte ne révoque jamais un token encore valide ; `POST /auth/password/reset` révoque toutes les sessions après succès.
+- Sans fournisseur mail configuré, l'envoi est un no-op en développement et échoue en production avant toute création de token ; l'état est visible via `/health/ready` et un avertissement au démarrage.
+
+**Codes d'erreur stables :** `AUTH_INVALID_CREDENTIALS` (401), `AUTH_TOKEN_MISSING` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` / `AUTH_SESSION_REVOKED` / `AUTH_SESSION_EXPIRED` (401), `AUTH_ACCOUNT_DISABLED` / `AUTH_NO_ACTIVE_MEMBERSHIP` / `AUTH_FORBIDDEN` / `AUTH_ORIGIN_FORBIDDEN` (403), `AUTH_SESSION_NOT_FOUND` (404), `AUTH_ORGANIZATION_REQUIRED` (409), `AUTH_RESET_TOKEN_INVALID` (400), `AUTH_RATE_LIMITED` (429), `AUTH_REDIS_UNAVAILABLE` (503).
 
 ---
 
@@ -474,7 +481,7 @@ Format unique Problem Details :
 **Restrictions :**
 
 - `X-API-Key` obligatoire, clé active, non expirée, de l'organisation cible.
-- Scope unique `ingestion:write`.
+- Scope `ingestion:write` uniquement ; le contrôle applicatif doit refuser `{}` et les doublons, que le `CHECK` SQL laisse passer.
 - Aucune route de lecture, d'export ou d'administration accessible par API key.
 - Payloads limités aux inscriptions, check-ins et paiements (BR-IMP-007) ; aucun payload participant direct.
 - Lot borné (ex. 1 000 lignes), réponse par ligne (succès/erreur), idempotence par clé fournie ou dérivée du contenu.
@@ -618,8 +625,10 @@ Les paramètres sont validés par Zod et figés dans `exports.parameters`.
 
 | Méthode | Chemin | Accès | Description |
 |---|---|---|---|
-| GET | `/health/live` | Public | Processus vivant |
-| GET | `/health/ready` | Interne | PostgreSQL, Redis, stockage |
+| GET | `/health` | Public | Vivacité : `{ "status": "ok" }` |
+| GET | `/health/ready` | Interne | État opérationnel : `status: "degraded"` et capacité `passwordResetEmail` |
+
+`/health/ready` renvoie 200 pour ne pas retirer le trafic ; il signale les capacités volontairement absentes sans exposer de secret. Les sondes PostgreSQL/Redis restent à brancher (dette documentée).
 
 Aucune information de version détaillée ni de configuration n'est exposée publiquement.
 

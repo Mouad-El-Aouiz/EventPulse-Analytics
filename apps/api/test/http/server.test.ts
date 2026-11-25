@@ -166,6 +166,15 @@ describe('server lifecycle', () => {
         service: 'EventPulse Analytics API',
       }),
     );
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'warn',
+        msg: 'Password reset email delivery is disabled',
+        provider: 'none',
+        deliveryEnabled: false,
+        intentionalNoOpInDevelopment: true,
+      }),
+    );
   });
 
   it('uses env.PORT for the listening port', async () => {
@@ -245,6 +254,77 @@ describe('server lifecycle', () => {
       }),
     );
     expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('flushes pending audits before closing the database', async () => {
+    const { logger, entries } = createCapturedLogger();
+    const order: string[] = [];
+    const flushAudits = vi.fn(async () => {
+      order.push('flush');
+      return { drained: true, pending: 0 };
+    });
+    const disconnect = vi.fn(async () => {
+      order.push('disconnect');
+    });
+    const handle = await startTestServer(logger, {
+      database: createDatabaseLifecycle({ disconnect }),
+      flushAudits,
+      auditFlushTimeoutMs: 50,
+    });
+
+    await handle.shutdown('audit-flush-test');
+
+    expect(flushAudits).toHaveBeenCalledWith(50);
+    expect(order).toEqual(['flush', 'disconnect']);
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        msg: 'Auth audit flush completed',
+        port: handle.port,
+      }),
+    );
+  });
+
+  it('logs a bounded audit flush timeout without blocking shutdown', async () => {
+    const { logger, entries } = createCapturedLogger();
+    const flushAudits = vi.fn(async () => ({ drained: false, pending: 2 }));
+    const handle = await startTestServer(logger, {
+      flushAudits,
+      auditFlushTimeoutMs: 25,
+    });
+
+    await expect(handle.shutdown('audit-flush-timeout-test')).resolves.toBeUndefined();
+
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'warn',
+        msg: 'Auth audit flush timed out',
+        port: handle.port,
+        pending: 2,
+        timeoutMs: 25,
+      }),
+    );
+  });
+
+  it('logs audit flush failures without blocking shutdown', async () => {
+    const { logger, entries } = createCapturedLogger();
+    const flushAudits = vi.fn(async () => {
+      throw new Error('audit writer unavailable');
+    });
+    const handle = await startTestServer(logger, {
+      flushAudits,
+      auditFlushTimeoutMs: 25,
+    });
+
+    await expect(handle.shutdown('audit-flush-failure-test')).resolves.toBeUndefined();
+
+    expect(entries()).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        msg: 'Auth audit flush failed',
+        port: handle.port,
+      }),
+    );
   });
 
   it('logs database disconnection failures without blocking shutdown', async () => {

@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler } from 'express';
 import { logger as defaultLogger } from '../config/logger.js';
 import { AppError } from '../errors/app-error.js';
+import { errorLogFields } from '../errors/error-logging.js';
 import { mapErrorToProblemDetails, PROBLEM_DETAILS_MEDIA_TYPE } from '../errors/problem-details.js';
 
 const INVALID_JSON_CODE = 'INVALID_JSON';
@@ -50,11 +51,7 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
     requestId: req.requestId,
     method: req.method,
     path: req.path,
-    errorName: logError instanceof Error ? logError.name : typeof logError,
-    errorMessage: logError instanceof Error ? logError.message : undefined,
-    errorStack: logError instanceof Error ? logError.stack : undefined,
-    errorCode: problem.code,
-    statusCode: problem.status,
+    ...errorLogFields(logError, { code: problem.code, status: problem.status }),
     isOperational: normalizedError instanceof AppError ? normalizedError.isOperational : false,
   };
 
@@ -67,6 +64,10 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
   if (res.headersSent) {
     next(error);
     return;
+  }
+
+  if (normalizedError instanceof AppError && normalizedError.retryAfterSeconds !== undefined) {
+    res.set('Retry-After', String(normalizedError.retryAfterSeconds));
   }
 
   res.set('Content-Type', PROBLEM_DETAILS_MEDIA_TYPE);

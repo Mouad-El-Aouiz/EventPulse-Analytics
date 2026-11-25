@@ -157,6 +157,46 @@ describe('GET /health', () => {
   });
 });
 
+describe('GET /health/ready', () => {
+  it('reports disabled password-reset email delivery without sensitive data', async () => {
+    const { app } = createTestContext();
+
+    const response = await request(app).get('/health/ready');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/^application\/json/);
+    expect(response.body).toEqual({
+      status: 'degraded',
+      checks: {
+        passwordResetEmail: {
+          provider: 'none',
+          deliveryEnabled: false,
+          reason: 'no_provider_configured',
+          intentionalNoOpInDevelopment: true,
+        },
+      },
+    });
+
+    const serialized = JSON.stringify(response.body);
+    expect(serialized).not.toContain('secret');
+    expect(serialized).not.toContain('token');
+    expect(serialized).not.toContain('@');
+  });
+
+  it('distinguishes the deliberate development no-op from a production gap', async () => {
+    env.NODE_ENV = 'production';
+
+    const { app } = createTestContext();
+    const response = await request(app).get('/health/ready');
+
+    expect(response.status).toBe(200);
+    expect(response.body.checks.passwordResetEmail).toMatchObject({
+      deliveryEnabled: false,
+      intentionalNoOpInDevelopment: false,
+    });
+  });
+});
+
 describe('request ID', () => {
   it('generates a request id when the header is missing', async () => {
     const { app } = createTestContext();
@@ -210,14 +250,14 @@ describe('security headers', () => {
 });
 
 describe('CORS', () => {
-  it('allows the configured non-production origin without credentials', async () => {
+  it('allows the configured non-production origin with credentials', async () => {
     const { app } = createTestContext();
 
     const response = await request(app).get('/health').set('Origin', DEVELOPMENT_ORIGIN);
 
     expect(response.headers['access-control-allow-origin']).toBe(DEVELOPMENT_ORIGIN);
     expect(response.headers['access-control-allow-origin']).not.toBe('*');
-    expect(response.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(response.headers['access-control-allow-credentials']).toBe('true');
   });
 
   it('does not allow an unknown origin', async () => {
@@ -251,7 +291,7 @@ describe('CORS', () => {
       'Content-Type,Authorization,X-Request-Id',
     );
     expect(response.headers['access-control-max-age']).toBe('600');
-    expect(response.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(response.headers['access-control-allow-credentials']).toBe('true');
   });
 
   it('denies all cross-origin access in production', async () => {
@@ -454,7 +494,7 @@ describe('global error handling', () => {
     expect(failed.level).toBe('error');
     expect(failed.errorName).toBe('Error');
     expect(failed.errorMessage).toBe('internal failure at /srv/app/secret.ts');
-    expect(failed.errorStack).toEqual(expect.stringContaining('internal failure'));
+    expect(failed.errorStack).toBeUndefined();
     expect(failed.errorCode).toBe('INTERNAL_SERVER_ERROR');
     expect(failed.statusCode).toBe(500);
     expect(failed.isOperational).toBe(false);
@@ -463,6 +503,36 @@ describe('global error handling', () => {
     expect(serializedLogs).not.toContain('query-secret');
     expect(serializedLogs).not.toContain('header-secret');
     expect(serializedLogs).not.toContain('cookie-secret');
+  });
+
+  it('never logs raw error messages or stacks in production', async () => {
+    env.NODE_ENV = 'production';
+
+    const { logger, entries } = createCapturedLogger();
+    const app = express();
+
+    app.use(requestLogger({ logger }));
+    app.get('/production-error', () => {
+      throw new Error('production secret detail at /srv/app/secret.ts');
+    });
+    app.use(errorHandler);
+
+    const response = await request(app).get('/production-error');
+
+    expect(response.status).toBe(500);
+
+    const failed = getLogEntry(entries(), 'HTTP request failed');
+    const serializedLogs = JSON.stringify(entries());
+
+    expect(failed.errorName).toBe('Error');
+    expect(failed.errorCode).toBe('INTERNAL_SERVER_ERROR');
+    expect(failed.statusCode).toBe(500);
+    expect(failed.requestId).toBe(response.headers['x-request-id']);
+    expect(failed.errorMessage).toBeUndefined();
+    expect(failed.errorStack).toBeUndefined();
+    expect(failed.err).toBeUndefined();
+    expect(serializedLogs).not.toContain('production secret detail');
+    expect(serializedLogs).not.toContain('/srv/app/secret.ts');
   });
 
   it('handles non-Error thrown values as internal errors', async () => {

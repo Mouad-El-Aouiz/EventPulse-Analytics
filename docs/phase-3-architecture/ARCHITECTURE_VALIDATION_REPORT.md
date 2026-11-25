@@ -23,7 +23,7 @@ Ce rapport clôt la Phase 3. Il vérifie :
 5. l'isolation multi-tenant, le RBAC, les flux asynchrones et l'absence de fonctionnalité hors périmètre ;
 6. les problèmes détectés, les décisions en attente et le verdict.
 
-Aucun code applicatif, aucune migration, aucun déploiement et aucune modification du périmètre V1 n'ont été produits.
+À la clôture de la Phase 3, aucun code applicatif, aucune migration, aucun déploiement et aucune modification du périmètre V1 n'avaient été produits.
 
 ---
 
@@ -46,7 +46,7 @@ Aucun code applicatif, aucune migration, aucun déploiement et aucune modificati
 | 11 | `ADR.md` | 11 ADR avec contexte, décision, alternatives, justification, conséquences | Complet |
 | 12 | `ARCHITECTURE_VALIDATION_REPORT.md` | Le présent rapport | Complet |
 
-**Résultat :** 12 / 12 livrables présents. Le dossier ne contient que des fichiers Markdown, aucun code source, aucun schéma exécutable, aucune migration.
+**Résultat :** 12 / 12 livrables présents. À la clôture de la Phase 3, le dossier ne contenait que des fichiers Markdown, aucun code source, aucun schéma exécutable, aucune migration.
 
 ### 2.2 Sources Phase 1 et Phase 2 examinées
 
@@ -63,15 +63,15 @@ Aucun code applicatif, aucune migration, aucun déploiement et aucune modificati
 
 ---
 
-## 3. Conformité aux contraintes strictes
+## 3. Conformité aux contraintes strictes à la clôture de la Phase 3
 
 | Contrainte | Vérification | Statut |
 |---|---|---|
-| Aucun développement applicatif | Aucun fichier `src/`, `package.json`, configuration exécutable | Respecté |
-| Aucun code React | Aucun composant, hook ou JSX | Respecté |
-| Aucun code backend exécutable | Extraits Prisma conceptuels uniquement, sans migration ni `schema.prisma` réel | Respecté |
-| Aucune migration Prisma | Le document décrit l'ordre des migrations, sans fichier de migration | Respecté |
-| Aucun déploiement | Docker/CI décrits comme cible, non exécutés | Respecté |
+| Aucun développement applicatif | Aucun fichier `src/`, `package.json`, configuration exécutable à cette date | Respecté |
+| Aucun code React | Aucun composant, hook ou JSX à cette date | Respecté |
+| Aucun code backend exécutable | Extraits Prisma conceptuels uniquement, sans migration ni `schema.prisma` réel à cette date | Respecté |
+| Aucune migration Prisma | Le document décrit l'ordre des migrations, sans fichier de migration à cette date | Respecté |
+| Aucun déploiement | Docker/CI décrits comme cible, non exécutés à cette date | Respecté |
 | Aucune modification du périmètre V1 | 15 modules, Must/Should inchangés ; aucun module ajouté | Respecté |
 | Aucune modification des règles métier | Les 77 BR sont reprises, aucune règle inventée | Respecté |
 | Aucun microservice | Monolithe modulaire + worker dédié explicites | Respecté |
@@ -441,7 +441,7 @@ Les décisions encore ouvertes sont des **paramètres d'implémentation**, pas d
 3. fixer D-07 avant la mise en production ;
 4. D-04 peut être reportée après les mesures de performance.
 
-Aucun code, aucune migration et aucun fichier d'implémentation n'a été créé. Aucun test technique n'est revendiqué : la validation est documentaire.
+À la clôture de la Phase 3, aucun code, aucune migration et aucun fichier d'implémentation n'avaient été créés. Aucun test technique n'était revendiqué : la validation était documentaire.
 
 **La Phase 3 est documentairement close. La Phase 4 — Backend Core Development peut démarrer après validation explicite de l'utilisateur, sans travail de codage anticipé.**
 

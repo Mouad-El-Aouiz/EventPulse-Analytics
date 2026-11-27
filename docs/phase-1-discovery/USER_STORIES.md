@@ -103,17 +103,37 @@
 - **Scénario principal :**
   1. L'invitant saisit l'email et sélectionne un rôle.
   2. Le système vérifie les règles d'attribution (ADMIN ne peut pas attribuer OWNER).
-  3. Un membership en attente et un token d'invitation à usage unique sont créés.
-  4. L'action est auditée.
-- **Alternatifs :** utilisateur déjà membre → invitation refusée.
-- **Cas d'erreur :** rôle non autorisé → 403 ; email invalide → 422.
+  3. Une invitation `PENDING` et un token à usage unique sont créés ; aucun membership n'est créé avant acceptation.
+  4. Le token brut est envoyé par email ; seul son hash est stocké. Si l'envoi échoue, l'invitation est révoquée et la requête échoue.
+  5. L'action est auditée.
+- **Alternatifs :** utilisateur déjà membre → `409 MEMBERSHIP_ALREADY_EXISTS`, aucune invitation créée.
+- **Cas d'erreur :** rôle non autorisé → 403 ; email invalide → 400 ; livraison impossible → 503.
 - **GWT :**
   - Given un ADMIN, When il tente d'inviter un OWNER, Then la demande est refusée.
-  - Given un email valide et un rôle autorisé, When l'invitation est créée, Then un membership en attente existe et l'action est auditée.
-  - Given un utilisateur déjà membre, When il est réinvité, Then la demande est refusée.
+  - Given un email valide et un rôle autorisé, When l'invitation est créée, Then une invitation `PENDING` existe, aucun membership n'est créé et l'action est auditée.
+  - Given un utilisateur déjà membre, When il est réinvité, Then la demande est refusée sans consommer d'invitation.
 - **Priorité :** Must. **Règles :** BR-ORG-005, BR-AUD-002. **KPI :** aucun.
 
-### US-ORG-02 — Modifier, rétrograder ou supprimer un membre
+### US-ORG-02 — Accepter une invitation
+- **Rôle :** invité (public pour le premier compte), utilisateur authentifié pour le flux de compatibilité.
+- **Objectif :** rejoindre l'organisation avec le rôle invité et ouvrir une session dans cette organisation.
+- **Précondition :** token d'invitation valide, `PENDING`, non expiré.
+- **Scénario principal :**
+  1. L'invité ouvre le lien public et choisit son mot de passe.
+  2. Le système vérifie le token et son expiration, puis applique un des trois cas : nouveau compte ; compte existant sans membership ; compte existant déjà membre actif avec le même rôle.
+  3. Dans la même transaction : compte créé si nécessaire, invitation consommée, membership créé si nécessaire, session émise dans l'organisation de l'invitation.
+  4. L'invité reçoit un access token et un refresh cookie ; il peut accéder aux ressources de l'organisation.
+- **Alternatifs :** compte existant → son mot de passe n'est **jamais** modifié ; membership incompatible (rôle ou statut) → `409`, invitation laissée `PENDING`.
+- **Cas d'erreur :** token inconnu/expiré/révoqué/déjà consommé ou compte inactif → 400 ; rate limit public → 429 ; livraison impossible → 503 à la création.
+- **GWT :**
+  - Given un nouvel email et un token valide, When il l'accepte, Then un compte, un membership `ACTIVE` et une session dans l'organisation invitante existent, et le token est `ACCEPTED`.
+  - Given un compte existant, When il accepte une invitation, Then son hash de mot de passe reste inchangé et le membership est créé.
+  - Given un token déjà accepté, When il est présenté à nouveau, Then la demande est refusée et aucune session supplémentaire n'est créée.
+  - Given deux acceptations simultanées du même token, Then une seule aboutit et l'intégrité compte/membership/session est conservée.
+  - Given une invitation pour un email différent du compte authentifié, When elle est acceptée via le flux authentifié, Then la demande est refusée.
+- **Priorité :** Must. **Règles :** BR-ORG-005, BR-AUD-002. **KPI :** aucun.
+
+### US-ORG-03 — Modifier, rétrograder ou supprimer un membre
 - **Rôle :** OWNER, ADMIN (non-OWNER).
 - **Objectif :** gouverner les accès.
 - **Préconditions :** cible existante ; règles de gouvernance respectées.
@@ -131,7 +151,7 @@
   - Given un EVENT_MANAGER retiré, When l'opération est terminée, Then ses événements ne lui sont plus accessibles.
 - **Priorité :** Must. **Règles :** BR-ORG-004, BR-ORG-005, BR-AUD-002. **KPI :** aucun.
 
-### US-ORG-03 — Désactiver ou réactiver un compte
+### US-ORG-04 — Désactiver ou réactiver un compte
 - **Rôle :** OWNER, ADMIN.
 - **Objectif :** suspendre un accès sans supprimer l'historique.
 - **Scénario principal :** désactivation → refresh tokens révoqués ; réactivation → accès rétabli ; audit.
@@ -141,7 +161,7 @@
   - Given une réactivation, When elle est effectuée, Then l'accès est rétabli et l'action est auditée.
 - **Priorité :** Must. **Règles :** BR-ORG-004, BR-AUD-002. **KPI :** aucun.
 
-### US-ORG-04 — Configurer l'organisation
+### US-ORG-05 — Configurer l'organisation
 - **Rôle :** OWNER, ADMIN.
 - **Objectif :** régler le fuseau, la devise et la rétention des exports.
 - **Scénario principal :**
@@ -156,7 +176,7 @@
   - Given un paramètre critique modifié, Then l'action est auditée.
 - **Priorité :** Must. **Règles :** H-04, H-05, Q-14, BR-EXP-001. **KPI :** ancrage des périodes.
 
-### US-ORG-05 — Gérer les API keys
+### US-ORG-06 — Gérer les API keys
 - **Rôle :** OWNER, ADMIN.
 - **Objectif :** authentifier l'endpoint d'ingestion.
 - **Scénario principal :**
@@ -172,7 +192,7 @@
   - Given une création/rotation/révocation, Then l'audit ne contient jamais le secret.
 - **Priorité :** Must. **Règles :** H-11, Q-12, BR-IMP-007, BR-AUD-004. **KPI :** aucun.
 
-### US-ORG-06 — Consulter le journal d'audit
+### US-ORG-07 — Consulter le journal d'audit
 - **Rôle :** OWNER, ADMIN.
 - **Objectif :** vérifier les actions sensibles.
 - **Scénario principal :**
@@ -881,7 +901,7 @@
 | Epic | Stories | Règles principales | KPI principaux |
 |---|---|---|---|
 | AUTH | US-AUTH-01 à 04 | H-12, BR-ORG-001, BR-AUD-002/004 | — |
-| ORG | US-ORG-01 à 06 | BR-ORG-004/005, Q-12, H-11, Q-14 | — |
+| ORG | US-ORG-01 à 07 | BR-ORG-004/005, Q-12, H-11, Q-14 | — |
 | EVT | US-EVT-01 à 08 | BR-EVT-001 à 006, Q-10 | KPI de performance |
 | PAR | US-PAR-01 à 04 | BR-PAR-001 à 005, Q-02, H-06 | KPI-PAR-001 |
 | REG | US-REG-01/02, US-TIC-01 | BR-REG-001 à 004, BR-TIC-001 à 003 | KPI-REG-001/002 |

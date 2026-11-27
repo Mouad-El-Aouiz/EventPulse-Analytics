@@ -149,6 +149,20 @@ export class SessionRepository {
     return result.count;
   }
 
+  async revokeAllForUserInOrganization(
+    userId: string,
+    organizationId: string,
+    revokedAt: Date,
+    tx: DatabaseClient = this.client,
+  ): Promise<number> {
+    const result = await tx.session.updateMany({
+      where: { userId, organizationId, revokedAt: null },
+      data: { revokedAt },
+    });
+
+    return result.count;
+  }
+
   async revokeFamily(
     familyId: string,
     revokedAt: Date,

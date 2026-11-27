@@ -37,6 +37,8 @@ describe('env loader', () => {
       JWT_KEY_ID: 'primary',
       REFRESH_TOKEN_PEPPER: 'development-only-refresh-pepper-change-before-production',
       PASSWORD_RESET_TOKEN_PEPPER: 'development-only-reset-pepper-change-before-production',
+      INVITATION_TOKEN_PEPPER: 'development-only-invitation-pepper-change-before-production',
+      API_KEY_PEPPER: 'development-only-api-key-pepper-change-before-production',
       REFRESH_SLIDING_TTL_SECONDS: 604_800,
       SESSION_ABSOLUTE_TTL_SECONDS: 2_592_000,
       PASSWORD_RESET_TTL_SECONDS: 1_800,
@@ -54,6 +56,8 @@ describe('env loader', () => {
       AUTH_LOCKOUT_BASE_SECONDS: 60,
       AUTH_LOCKOUT_MAX_SECONDS: 86_400,
       AUTH_RATE_LIMIT_FAIL_CLOSED: true,
+      INVITATION_ACCEPT_MAX_ATTEMPTS: 20,
+      INVITATION_ACCEPT_WINDOW_SECONDS: 900,
     });
     expect(envConfigMock).toHaveBeenCalledWith(
       expect.objectContaining({

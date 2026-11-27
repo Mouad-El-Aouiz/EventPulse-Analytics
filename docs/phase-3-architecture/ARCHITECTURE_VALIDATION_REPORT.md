@@ -194,7 +194,7 @@ Ce rapport clôt la Phase 3. Il vérifie :
 | Domaine | US | Nombre | Couverture architecturale |
 |---|---|---|---|
 | AUTH | US-AUTH-01 à 04 | 4 | `/auth/*`, sessions, refresh rotation, reset, changement d'organisation |
-| ORG | US-ORG-01 à 06 | 6 | `/organizations/*`, `/members`, `/invitations`, `/api-keys`, `/admin/audit` |
+| ORG | US-ORG-01 à 07 | 7 | `/organizations/*`, `/members`, `/invitations`, `/api-keys`, `/admin/audit` |
 | EVT | US-EVT-01 à 08 | 8 | `/events/*`, transitions, assignation EM, fenêtre de check-in, filtres |
 | PAR | US-PAR-01 à 04 | 4 | `/participants/*`, recherche, fusion, anonymisation, effacement définitif |
 | REG | US-REG-01 à 02 | 2 | `/registrations/*`, création, transitions de statut |

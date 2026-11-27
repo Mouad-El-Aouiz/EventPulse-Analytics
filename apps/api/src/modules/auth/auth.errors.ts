@@ -7,7 +7,6 @@ export const AUTH_TOKEN_EXPIRED = 'AUTH_TOKEN_EXPIRED';
 export const AUTH_SESSION_REVOKED = 'AUTH_SESSION_REVOKED';
 export const AUTH_SESSION_EXPIRED = 'AUTH_SESSION_EXPIRED';
 export const AUTH_SESSION_NOT_FOUND = 'AUTH_SESSION_NOT_FOUND';
-export const AUTH_FORBIDDEN = 'AUTH_FORBIDDEN';
 export const AUTH_NO_ACTIVE_MEMBERSHIP = 'AUTH_NO_ACTIVE_MEMBERSHIP';
 export const AUTH_ORGANIZATION_REQUIRED = 'AUTH_ORGANIZATION_REQUIRED';
 export const AUTH_RESET_TOKEN_INVALID = 'AUTH_RESET_TOKEN_INVALID';
@@ -109,10 +108,4 @@ export function resetTokenInvalidError(): AppError {
   });
 }
 
-export function forbiddenError(): AppError {
-  return new AppError('Forbidden', {
-    statusCode: 403,
-    code: AUTH_FORBIDDEN,
-    publicDetail: 'Access is forbidden.',
-  });
-}
+export { AUTH_FORBIDDEN, forbiddenError } from '../../shared/http/authorization.js';

@@ -98,6 +98,8 @@ Variables d'authentification (Phase 4A.4) :
 | `JWT_KEY_ID`                      | Chaîne de 1 à 64 caractères                 | `primary`         |
 | `REFRESH_TOKEN_PEPPER`            | Secret d'au moins 32 caractères             | Développement uniquement |
 | `PASSWORD_RESET_TOKEN_PEPPER`     | Secret d'au moins 32 caractères             | Développement uniquement |
+| `INVITATION_TOKEN_PEPPER`         | Secret d'au moins 32 caractères             | Développement uniquement |
+| `API_KEY_PEPPER`                  | Secret d'au moins 32 caractères             | Développement uniquement |
 | `REFRESH_SLIDING_TTL_SECONDS`     | Entier de `60` à 2 592 000                  | `604800` (7 jours) |
 | `SESSION_ABSOLUTE_TTL_SECONDS`    | Entier ≥ TTL glissant, jusqu'à 31 536 000   | `2592000` (30 jours) |
 | `PASSWORD_RESET_TTL_SECONDS`      | Entier de `60` à 86 400                     | `1800`            |
@@ -118,7 +120,7 @@ Variables d'authentification (Phase 4A.4) :
 | `AUTH_LOCKOUT_MAX_SECONDS`        | Entier ≥ base, jusqu'à 604 800              | `86400`           |
 | `AUTH_RATE_LIMIT_FAIL_CLOSED`     | `true` ou `false` (forcé à `true` en production) | `true`       |
 
-En production, `JWT_ACCESS_SECRET`, `REFRESH_TOKEN_PEPPER`, `PASSWORD_RESET_TOKEN_PEPPER`, `REDIS_URL` et `CORS_ALLOWED_ORIGINS` sont obligatoires, les secrets de développement sont refusés, `AUTH_COOKIE_SECURE` ne peut pas être `false` et les origines `*` sont rejetées. `AUTH_RATE_LIMIT_FAIL_CLOSED=false` est refusé en production : les routes d'authentification échouent en `503 AUTH_REDIS_UNAVAILABLE` lorsque Redis est indisponible. En développement et en test, l'absence de `REDIS_URL` utilise un store de rate limiting en mémoire, limité au processus courant. `TRUST_PROXY_HOPS` doit refléter le nombre exact de proxys de confiance ; `true` n'est jamais accepté.
+En production, `JWT_ACCESS_SECRET`, `REFRESH_TOKEN_PEPPER`, `PASSWORD_RESET_TOKEN_PEPPER`, `INVITATION_TOKEN_PEPPER`, `API_KEY_PEPPER`, `REDIS_URL` et `CORS_ALLOWED_ORIGINS` sont obligatoires, les secrets de développement sont refusés, `AUTH_COOKIE_SECURE` ne peut pas être `false` et les origines `*` sont rejetées. `AUTH_RATE_LIMIT_FAIL_CLOSED=false` est refusé en production : les routes d'authentification échouent en `503 AUTH_REDIS_UNAVAILABLE` lorsque Redis est indisponible. En développement et en test, l'absence de `REDIS_URL` utilise un store de rate limiting en mémoire, limité au processus courant. `TRUST_PROXY_HOPS` doit refléter le nombre exact de proxys de confiance ; `true` n'est jamais accepté.
 
 Le fichier `.env.example` contient également `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_PORT`, utilisés uniquement par Docker Compose. Le mot de passe fourni est réservé au développement local.
 

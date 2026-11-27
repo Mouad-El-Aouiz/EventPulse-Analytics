@@ -943,8 +943,8 @@ Titre de page + badge de statut + actions principales
 | Reports & Exports | 13 | Selon rapport | US-REP-01 à 04 |
 | Ingestion | 6 | — | US-IMP-01 à 04 |
 | Users & Roles | 15 | — | US-ORG-01 à 03 |
-| Organization Settings | 15 | — | US-ORG-04/05 |
-| Audit | 15 | — | US-ORG-06 |
+| Organization Settings | 15 | — | US-ORG-05/06 |
+| Audit | 15 | — | US-ORG-07 |
 | Advanced Analytics (Should) | 12 | Tous, filtres avancés | US-ADV-01 |
 | Real-time (Should) | 14 | KPI temps réel | US-RT-01 |
 

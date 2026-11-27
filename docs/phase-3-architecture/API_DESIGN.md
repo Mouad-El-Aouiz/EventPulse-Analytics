@@ -253,17 +253,44 @@ Format unique Problem Details :
 | GET | `/organizations/current/invitations` | Invitations | ✓ | ✓ | — | — | — |
 | POST | `/organizations/current/invitations` | Inviter | ✓ | ◐ | — | — | — |
 | DELETE | `/organizations/current/invitations/{invitationId}` | Révoquer | ✓ | ✓ | — | — | — |
+| POST | `/invitations/accept` | Accepter avec une session existante | ✓ | ✓ | ✓ | ✓ | ✓ |
+| POST | `/invitations/accept-token` | Accepter publiquement via le token email | Public + rate limit | Public | Public | Public | Public |
 | GET | `/organizations/current/api-keys` | Clés API (sans secret) | ✓ | ✓ | — | — | — |
 | POST | `/organizations/current/api-keys` | Créer une clé | ✓ | ✓ | — | — | — |
 | POST | `/organizations/current/api-keys/{keyId}/revoke` | Révoquer | ✓ | ✓ | — | — | — |
+| POST | `/organizations/current/api-keys/{keyId}/rotate` | Rotater atomiquement | ✓ | ✓ | — | — | — |
 
 **Restrictions :**
 
-- `PATCH /organizations/current` : OWNER pour devise, slug et paramètres critiques ; ADMIN pour nom, fuseau et rétention, dans les limites validées.
+- `PATCH /organizations/current` : OWNER pour devise, slug et paramètres critiques ; ADMIN pour nom, fuseau et rétention, dans les limites validées. Le rôle effectif est relu dans la transaction ; une rétrogradation concurrente ne peut pas être contournée.
 - ADMIN ne peut ni attribuer ni modifier le rôle OWNER, ni désactiver un OWNER.
-- La dernière membership OWNER active ne peut pas être dégradée ni désactivée.
-- `POST /invitations` avec `role=OWNER` est réservé à OWNER.
-- Le secret d'API n'est retourné qu'une fois, à la création.
+- La dernière membership OWNER active ne peut pas être dégradée ni désactivée ; le verrou d'organisation sérialise les démotions concurrentes.
+- `POST /organizations/current/invitations` avec `role=OWNER` est réservé à OWNER.
+- Toutes les écritures de membres et d'invitations sont filtrées par `organization_id` : une ressource d'un autre tenant retourne `404`, jamais une fuite d'existence.
+- La création et la révocation d'invitations ainsi que les opérations sur les clés API acquièrent d'abord le verrou d'organisation (`SELECT ... FOR UPDATE`) puis relisent le rôle effectif de l'acteur dans la transaction, avant de verrouiller la ressource ciblée. Une rétrogradation concurrente ne peut donc pas être contournée.
+- La désactivation d'une membership révoque toutes les sessions de l'utilisateur dans l'organisation **dans la même transaction** ; un échec de révocation annule la désactivation. La garde de membership verrouillée lors de la création/rotation de session empêche toute session concurrente de survivre au commit.
+- Le secret d'API n'est retourné qu'une fois, à la création ou à la rotation.
+
+**Invitations :**
+
+- Le token brut (32 octets, base64url, 43 caractères) n'est envoyé que par email ; la base ne stocke que son hash HMAC avec `INVITATION_TOKEN_PEPPER`.
+- `POST /invitations/accept` reste disponible pour un client déjà authentifié ; l'email du compte doit correspondre exactement à celui de l'invitation.
+- `POST /invitations/accept-token` est public : le token est la **preuve de possession de l'adresse pour cette invitation uniquement**. Il n'existe pas de flag global `emailVerified` et le flux ne modifie jamais l'email d'un compte existant.
+- Les trois cas sont supportés dans une transaction unique (compte, membership, consommation de l'invitation, session) :
+  1. nouvel email → compte provisionné avec le mot de passe choisi (Argon2id), membership `ACTIVE`, session émise ;
+  2. compte existant sans membership → compte réutilisé, **mot de passe existant jamais modifié**, membership créé ;
+  3. compte existant déjà membre actif avec le rôle invité → token consommé, session émise, aucun doublon de membership ; rôle ou statut incompatible → `409 MEMBERSHIP_ALREADY_EXISTS` sans consommer le token.
+- Le token est à usage unique. L'organisation est verrouillée (`SELECT ... FOR UPDATE`) avant la ligne d'invitation, puis statut `PENDING`, expiration et consommation sont relus et verrouillés dans la transaction : une acceptation concurrente, une révocation ou un rejeu ne peut pas produire d'état partiel et retourne selon le cas `400 INVITATION_INVALID` ou `409 MEMBERSHIP_ALREADY_EXISTS`/`INVITATION_NOT_PENDING`.
+- La route publique est rate-limitée par IP (`INVITATION_ACCEPT_MAX_ATTEMPTS` / `INVITATION_ACCEPT_WINDOW_SECONDS`, défauts 20 / 900 s) et ne divulgue pas si l'email existe : token inconnu, expiré, révoqué, consommé ou compte inactif partagent le même code.
+- Un échec d'envoi email révoque l'invitation créée et retourne `503 INVITATION_DELIVERY_FAILED`. La révocation est retentée (3 tentatives) ; si toutes échouent, un log structuré `INVITATION_REVOCATION_FAILED` avec `requiresManualRevocation: true` est émis. Une fenêtre résiduelle existe si le processus s'arrête entre l'échec d'envoi et la révocation : l'invitation peut alors rester `PENDING` et doit être révoquée manuellement (aucune outbox/queue introduite pour ce point).
+
+**Clés API :**
+
+- `expiresAt` est optionnel ; une date passée ou invalide est refusée (`400 API_KEY_EXPIRY_INVALID`) et une clé expirée n'est plus validée.
+- La rotation est atomique : l'ancienne clé est verrouillée, révoquée conditionnellement, puis la nouvelle est créée dans la même transaction avec les **mêmes scopes** (nom et expiration conservés sauf surcharge valide). L'ancien secret est inutilisable dès le commit ; deux rotations concurrentes n'en laissent qu'une aboutir (`409 API_KEY_NOT_ACTIVE`).
+- Aucune réponse ne contient `keyHash`, pepper ou secret après la création/rotation.
+
+**Erreurs stables :** `MEMBERSHIP_NOT_FOUND` (404), `INVITATION_NOT_FOUND` (404), `API_KEY_NOT_FOUND` (404), `INVITATION_INVALID` (400), `API_KEY_SCOPES_INVALID` (400), `API_KEY_EXPIRY_INVALID` (400), `INVITATION_EMAIL_MISMATCH` (403), `MEMBERSHIP_ALREADY_EXISTS` (409), `LAST_OWNER_PROTECTED` (409), `INVITATION_ALREADY_PENDING` (409), `INVITATION_NOT_PENDING` (409), `API_KEY_NOT_ACTIVE` (409), `INVITATION_DELIVERY_FAILED` (503).
 
 ---
 

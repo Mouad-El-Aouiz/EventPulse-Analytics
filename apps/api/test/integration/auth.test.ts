@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Prisma } from '@prisma/client';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { MembershipSessionGuard } from '../../src/shared/contracts/membership-session-guard.js';
 import type { ActorContext, AuthContext } from '../../src/shared/types/actor-context.js';
+import { AuthFacade } from '../../src/modules/auth/auth.facade.js';
 import { PrismaAuthUnitOfWork } from '../../src/modules/auth/repositories/auth-unit-of-work.js';
 import { PasswordResetTokenRepository } from '../../src/modules/auth/repositories/password-reset-token.repository.js';
 import { SessionRepository } from '../../src/modules/auth/repositories/session.repository.js';
@@ -12,7 +15,11 @@ import { SessionService } from '../../src/modules/auth/services/session.service.
 import { hashTokenWithPepper } from '../../src/modules/auth/services/token-hash.js';
 import { TokenService } from '../../src/modules/auth/services/token.service.js';
 import { PrismaAuditWriter } from '../../src/modules/audit/audit.writer.js';
-import { PrismaOrganizationsReader } from '../../src/modules/organizations/organizations-reader.js';
+import { PrismaOrganizationsFacade } from '../../src/modules/organizations/organizations-reader.js';
+import { MembershipRepository } from '../../src/modules/organizations/repositories/membership.repository.js';
+import { OrganizationRepository } from '../../src/modules/organizations/repositories/organization.repository.js';
+import { PrismaOrganizationsUnitOfWork } from '../../src/modules/organizations/repositories/organizations-unit-of-work.js';
+import { MembershipService } from '../../src/modules/organizations/services/membership.service.js';
 import type { MailPort, PasswordResetMail } from '../../src/shared/ports/mail.port.js';
 import { InMemoryRateLimitStore } from '../../src/shared/rate-limit/in-memory-rate-limit.store.js';
 import { RateLimiter } from '../../src/shared/rate-limit/rate-limiter.js';
@@ -50,9 +57,72 @@ class RecordingMail implements MailPort {
   async sendPasswordReset(input: PasswordResetMail): Promise<void> {
     this.messages.push(input);
   }
+
+  async sendOrganizationInvitation(): Promise<void> {}
 }
 
-function createHarness() {
+interface Deferred {
+  promise: Promise<void>;
+  resolve: () => void;
+}
+
+function deferred(): Deferred {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+
+  return { promise, resolve };
+}
+
+interface SessionGuardHooks {
+  beforeLock?: () => void | Promise<void>;
+  afterLock?: () => Promise<void>;
+}
+
+class GatedMembershipSessionGuard implements MembershipSessionGuard {
+  constructor(
+    private readonly inner: PrismaOrganizationsFacade,
+    private readonly hooks: SessionGuardHooks,
+  ) {}
+
+  async lockActiveMembership(
+    userId: string,
+    organizationId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<boolean> {
+    await this.hooks.beforeLock?.();
+    const active = await this.inner.lockActiveMembership(userId, organizationId, tx);
+    await this.hooks.afterLock?.();
+
+    return active;
+  }
+}
+
+interface MembershipLockHooks {
+  beforeLock?: () => void;
+}
+
+class GatedMembershipOrganizationRepository extends OrganizationRepository {
+  constructor(private readonly hooks: MembershipLockHooks) {
+    super(client);
+  }
+
+  override async lockById(
+    id: string,
+    tx?: Parameters<OrganizationRepository['lockById']>[1],
+  ): Promise<void> {
+    this.hooks.beforeLock?.();
+    await super.lockById(id, tx);
+  }
+}
+
+interface AuthHarnessOptions {
+  membershipGuard?: MembershipSessionGuard;
+  membershipOrganizations?: OrganizationRepository;
+}
+
+function createHarness(options: AuthHarnessOptions = {}) {
   const mail = new RecordingMail();
   const rateLimiter = new RateLimiter({
     store: new InMemoryRateLimitStore(),
@@ -64,12 +134,13 @@ function createHarness() {
   const users = new UserRepository(client);
   const sessions = new SessionRepository(client);
   const resetTokens = new PasswordResetTokenRepository(client);
-  const organizations = new PrismaOrganizationsReader(client);
+  const organizations = new PrismaOrganizationsFacade(client);
   const audit = new PrismaAuditWriter(client);
   const unitOfWork = new PrismaAuthUnitOfWork(client);
 
   const sessionService = new SessionService({
     sessions,
+    memberships: options.membershipGuard ?? organizations,
     tokens,
     unitOfWork,
     clock: { now: () => new Date() },
@@ -116,7 +187,21 @@ function createHarness() {
     forgotTimingFloorMs: 0,
   });
 
-  return { service, mail, sessions, resetTokens };
+  const authFacade = new AuthFacade(users, sessions);
+  const membershipService = new MembershipService({
+    memberships: new MembershipRepository(client),
+    organizations: options.membershipOrganizations ?? new OrganizationRepository(client),
+    unitOfWork: new PrismaOrganizationsUnitOfWork(client),
+    auth: authFacade,
+    audit,
+    clock: { now: () => new Date() },
+    logger: {
+      error: () => undefined,
+      warn: () => undefined,
+    } as never,
+  });
+
+  return { service, mail, sessions, resetTokens, authFacade, membershipService };
 }
 
 async function createAccount(
@@ -135,6 +220,28 @@ async function createAccount(
   });
 
   return { organization, user, membership };
+}
+
+async function createManagedViewer() {
+  const account = await createAccount({ role: 'VIEWER' });
+  const owner = await createUser(client);
+  const ownerMembership = await createMembership(
+    client,
+    account.organization.id,
+    owner.id,
+    'OWNER',
+  );
+  const ownerActor: ActorContext = {
+    userId: owner.id,
+    sessionId: 'owner-session',
+    organizationId: account.organization.id,
+    roleHint: 'OWNER',
+    tokenId: 'owner-token',
+    membershipId: ownerMembership.id,
+    role: 'OWNER',
+  };
+
+  return { account, owner, ownerMembership, ownerActor };
 }
 
 function loginInput(email: string, overrides: Record<string, unknown> = {}) {
@@ -604,5 +711,198 @@ describe('Auth PostgreSQL integration', () => {
     await expect(
       service.resetPassword(latestToken, 'third-fallback-password', CONTEXT),
     ).rejects.toMatchObject({ code: 'AUTH_RESET_TOKEN_INVALID' });
+  });
+
+  it('revokes sessions and refuses the old refresh token when a membership is disabled', async () => {
+    const account = await createAccount({ role: 'VIEWER' });
+    const owner = await createUser(client);
+    const ownerMembership = await createMembership(
+      client,
+      account.organization.id,
+      owner.id,
+      'OWNER',
+    );
+    const { service } = createHarness();
+
+    const login = await service.login(loginInput(account.user.email));
+    const session = await client.session.findFirstOrThrow({
+      where: { userId: account.user.id, revokedAt: null },
+    });
+    expect(session.organizationId).toBe(account.organization.id);
+
+    const membershipService = new MembershipService({
+      memberships: new MembershipRepository(client),
+      organizations: new OrganizationRepository(client),
+      unitOfWork: new PrismaOrganizationsUnitOfWork(client),
+      auth: new AuthFacade(new UserRepository(client), new SessionRepository(client)),
+      audit: new PrismaAuditWriter(client),
+      clock: { now: () => new Date() },
+      logger: {
+        error: () => undefined,
+        warn: () => undefined,
+      } as never,
+    });
+
+    await membershipService.remove(
+      {
+        userId: owner.id,
+        sessionId: 'owner-session',
+        organizationId: account.organization.id,
+        roleHint: 'OWNER',
+        tokenId: 'owner-token',
+        membershipId: ownerMembership.id,
+        role: 'OWNER',
+      },
+      account.membership.id,
+      CONTEXT,
+    );
+
+    const storedSession = await client.session.findUniqueOrThrow({ where: { id: session.id } });
+    expect(storedSession.revokedAt).not.toBeNull();
+    await expect(
+      client.membership.findUniqueOrThrow({ where: { id: account.membership.id } }),
+    ).resolves.toMatchObject({ status: 'DISABLED' });
+
+    await expect(service.refresh(login.refreshToken, CONTEXT)).rejects.toMatchObject({
+      code: 'AUTH_SESSION_REVOKED',
+    });
+
+    expect(
+      await client.session.count({ where: { userId: account.user.id, revokedAt: null } }),
+    ).toBe(0);
+    expect(await client.session.count({ where: { userId: account.user.id } })).toBe(1);
+  });
+
+  it('rolls back deactivation when session revocation fails and revokes on retry', async () => {
+    const { account, ownerActor } = await createManagedViewer();
+    const { service, membershipService, authFacade } = createHarness();
+    const login = await service.login(loginInput(account.user.email));
+    const session = await client.session.findFirstOrThrow({
+      where: { userId: account.user.id, revokedAt: null },
+    });
+    const revoke = vi
+      .spyOn(authFacade, 'revokeUserSessions')
+      .mockRejectedValueOnce(new Error('session store unavailable'));
+
+    await expect(
+      membershipService.remove(ownerActor, account.membership.id, CONTEXT),
+    ).rejects.toThrow('session store unavailable');
+
+    await expect(
+      client.membership.findUniqueOrThrow({ where: { id: account.membership.id } }),
+    ).resolves.toMatchObject({ status: 'ACTIVE' });
+    await expect(
+      client.session.findUniqueOrThrow({ where: { id: session.id } }),
+    ).resolves.toMatchObject({ revokedAt: null });
+
+    revoke.mockRestore();
+    await membershipService.remove(ownerActor, account.membership.id, CONTEXT);
+
+    await expect(
+      client.membership.findUniqueOrThrow({ where: { id: account.membership.id } }),
+    ).resolves.toMatchObject({ status: 'DISABLED' });
+    await expect(
+      client.session.findUniqueOrThrow({ where: { id: session.id } }),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
+    await expect(service.refresh(login.refreshToken, CONTEXT)).rejects.toMatchObject({
+      code: 'AUTH_SESSION_REVOKED',
+    });
+  });
+
+  it('never reactivates a revoked session when the membership is reactivated', async () => {
+    const { account, ownerActor } = await createManagedViewer();
+    const { service, membershipService } = createHarness();
+    const login = await service.login(loginInput(account.user.email));
+
+    await membershipService.remove(ownerActor, account.membership.id, CONTEXT);
+    await membershipService.update(
+      ownerActor,
+      account.membership.id,
+      { status: 'ACTIVE' },
+      CONTEXT,
+    );
+
+    await expect(
+      client.membership.findUniqueOrThrow({ where: { id: account.membership.id } }),
+    ).resolves.toMatchObject({ status: 'ACTIVE' });
+    expect(
+      await client.session.count({ where: { userId: account.user.id, revokedAt: null } }),
+    ).toBe(0);
+    await expect(service.refresh(login.refreshToken, CONTEXT)).rejects.toMatchObject({
+      code: 'AUTH_SESSION_REVOKED',
+    });
+
+    const relogin = await service.login(loginInput(account.user.email));
+    expect(relogin.refreshToken).not.toBe(login.refreshToken);
+    expect(
+      await client.session.count({ where: { userId: account.user.id, revokedAt: null } }),
+    ).toBe(1);
+  });
+
+  it('revokes a session created concurrently by login when login wins the membership lock', async () => {
+    const { account, ownerActor } = await createManagedViewer();
+    const loginLocked = deferred();
+    const releaseLogin = deferred();
+    const disableAttempting = deferred();
+    const guard = new GatedMembershipSessionGuard(new PrismaOrganizationsFacade(client), {
+      afterLock: async () => {
+        loginLocked.resolve();
+        await releaseLogin.promise;
+      },
+    });
+    const { service, membershipService } = createHarness({
+      membershipGuard: guard,
+      membershipOrganizations: new GatedMembershipOrganizationRepository({
+        beforeLock: () => disableAttempting.resolve(),
+      }),
+    });
+
+    const loginPromise = service.login(loginInput(account.user.email));
+    await loginLocked.promise;
+    const disablePromise = membershipService.remove(ownerActor, account.membership.id, CONTEXT);
+    await disableAttempting.promise;
+    releaseLogin.resolve();
+
+    const [loginResult, disableResult] = await Promise.allSettled([loginPromise, disablePromise]);
+    expect(disableResult.status).toBe('fulfilled');
+    expect(loginResult.status).toBe('fulfilled');
+    await expect(
+      client.membership.findUniqueOrThrow({ where: { id: account.membership.id } }),
+    ).resolves.toMatchObject({ status: 'DISABLED' });
+    expect(
+      await client.session.count({ where: { userId: account.user.id, revokedAt: null } }),
+    ).toBe(0);
+
+    if (loginResult.status === 'fulfilled') {
+      await expect(service.refresh(loginResult.value.refreshToken, CONTEXT)).rejects.toMatchObject({
+        code: 'AUTH_SESSION_REVOKED',
+      });
+    }
+  });
+
+  it('refuses login when deactivation commits before the session membership lock', async () => {
+    const { account, ownerActor } = await createManagedViewer();
+    const loginReached = deferred();
+    const releaseLogin = deferred();
+    const guard = new GatedMembershipSessionGuard(new PrismaOrganizationsFacade(client), {
+      beforeLock: async () => {
+        loginReached.resolve();
+        await releaseLogin.promise;
+      },
+    });
+    const { service, membershipService } = createHarness({ membershipGuard: guard });
+
+    const loginPromise = service.login(loginInput(account.user.email));
+    await loginReached.promise;
+    await membershipService.remove(ownerActor, account.membership.id, CONTEXT);
+    releaseLogin.resolve();
+
+    await expect(loginPromise).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'AUTH_NO_ACTIVE_MEMBERSHIP',
+    });
+    expect(
+      await client.session.count({ where: { userId: account.user.id, revokedAt: null } }),
+    ).toBe(0);
   });
 });

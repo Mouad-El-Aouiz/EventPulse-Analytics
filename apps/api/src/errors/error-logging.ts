@@ -39,3 +39,18 @@ export function errorLogFields(error: unknown, fallback: ErrorLogFallback = {}):
 
   return fields;
 }
+
+/**
+ * Log-safe error fields for security-sensitive paths: backend error messages
+ * can embed query fragments, tokens or email addresses, so they are never
+ * forwarded even outside production.
+ */
+export function sanitizedErrorFields(
+  error: unknown,
+  fallback: ErrorLogFallback = {},
+): Omit<ErrorLogFields, 'errorMessage'> {
+  const fields = errorLogFields(error, fallback);
+  delete fields.errorMessage;
+
+  return fields;
+}

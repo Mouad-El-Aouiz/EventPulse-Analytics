@@ -1,4 +1,10 @@
+import type { RequestHandler } from 'express';
 import type { Router } from 'express';
+import type { Logger } from 'pino';
+import type { AuditPort } from '../../shared/ports/audit.port.js';
+import type { Clock } from '../../shared/ports/clock.port.js';
+import type { MailPort } from '../../shared/ports/mail.port.js';
+import type { InvitationAccountGateway } from '../../shared/contracts/invitation-account-gateway.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { getPrismaClient } from '../../database/prisma.js';
@@ -7,8 +13,10 @@ import { NullMailPort } from '../../shared/mail/null-mail.js';
 import { systemClock } from '../../shared/ports/clock.port.js';
 import { createRateLimiter } from '../../shared/rate-limit/create-rate-limiter.js';
 import { PrismaAuditWriter } from '../audit/audit.writer.js';
-import { PrismaOrganizationsReader } from '../organizations/organizations-reader.js';
+import { PrismaOrganizationsFacade } from '../organizations/organizations-reader.js';
 import { AuthController } from './auth.controller.js';
+import { AuthFacade } from './auth.facade.js';
+import { AuthInvitationAccountGateway } from './invitation-account.gateway.js';
 import { AuthService, type AuditFlushResult } from './auth.service.js';
 import { createAuthRouter as createAuthRoutes } from './auth.routes.js';
 import { PrismaAuthUnitOfWork } from './repositories/auth-unit-of-work.js';
@@ -35,7 +43,27 @@ const USER_ROUTE_MAX_ATTEMPTS = 300;
 const USER_ROUTE_WINDOW_SECONDS = 60;
 const DEFAULT_AUTH_AUDIT_FLUSH_TIMEOUT_MS = 3_000;
 
+export interface SharedAuthRuntime {
+  authenticate: RequestHandler;
+  optionalAuthenticate: RequestHandler;
+  tenantContext: RequestHandler;
+  userRateLimit: RequestHandler;
+  facade: AuthFacade;
+  invitationAccounts: InvitationAccountGateway;
+  audit: AuditPort;
+  mail: MailPort;
+  clock: Clock;
+}
+
+interface AuthInfrastructure extends SharedAuthRuntime {
+  controller: AuthController;
+  requireOrigin: RequestHandler;
+  service: AuthService;
+  logger: Logger;
+}
+
 let activeAuthService: AuthService | undefined;
+let infrastructure: AuthInfrastructure | undefined;
 
 export function flushAuthAudits(
   timeoutMs = DEFAULT_AUTH_AUDIT_FLUSH_TIMEOUT_MS,
@@ -47,14 +75,14 @@ export function flushAuthAudits(
   return activeAuthService.flushBackgroundAudits(timeoutMs);
 }
 
-export function createAuthRouter(): Router {
+function buildInfrastructure(): AuthInfrastructure {
   const client = getPrismaClient();
   const clock = systemClock;
 
   const users = new UserRepository(client);
   const sessions = new SessionRepository(client);
   const resetTokens = new PasswordResetTokenRepository(client);
-  const organizations = new PrismaOrganizationsReader(client);
+  const organizations = new PrismaOrganizationsFacade(client);
   const audit = new PrismaAuditWriter(client);
   const passwords = new PasswordService();
   const rateLimiter = createRateLimiter();
@@ -71,6 +99,7 @@ export function createAuthRouter(): Router {
 
   const sessionService = new SessionService({
     sessions,
+    memberships: organizations,
     tokens,
     unitOfWork,
     clock,
@@ -80,6 +109,14 @@ export function createAuthRouter(): Router {
   });
 
   const mail = new NullMailPort(env.NODE_ENV !== 'production');
+
+  const invitationAccounts = new AuthInvitationAccountGateway({
+    users,
+    passwords,
+    sessions: sessionService,
+    tokens,
+    clock,
+  });
 
   const passwordResetService = new PasswordResetService({
     users,
@@ -151,16 +188,64 @@ export function createAuthRouter(): Router {
     clock,
   };
 
-  return createAuthRoutes({
+  return {
     controller,
+    requireOrigin: createRequireOriginMiddleware(allowedOrigins),
+    service,
+    logger,
     authenticate: createAuthenticateMiddleware(authenticateDependencies),
     optionalAuthenticate: createOptionalAuthenticateMiddleware(authenticateDependencies),
     tenantContext: createTenantContextMiddleware(organizations),
-    requireOrigin: createRequireOriginMiddleware(allowedOrigins),
     userRateLimit: createUserRateLimitMiddleware(
       rateLimiter,
       USER_ROUTE_MAX_ATTEMPTS,
       USER_ROUTE_WINDOW_SECONDS,
     ),
+    facade: new AuthFacade(users, sessions),
+    invitationAccounts,
+    audit,
+    mail,
+    clock,
+  };
+}
+
+export function getSharedAuthRuntime(): SharedAuthRuntime {
+  infrastructure ??= buildInfrastructure();
+
+  const {
+    authenticate,
+    optionalAuthenticate,
+    tenantContext,
+    userRateLimit,
+    facade,
+    invitationAccounts,
+    audit,
+    mail,
+    clock,
+  } = infrastructure;
+
+  return {
+    authenticate,
+    optionalAuthenticate,
+    tenantContext,
+    userRateLimit,
+    facade,
+    invitationAccounts,
+    audit,
+    mail,
+    clock,
+  };
+}
+
+export function createAuthRouter(): Router {
+  infrastructure ??= buildInfrastructure();
+
+  return createAuthRoutes({
+    controller: infrastructure.controller,
+    authenticate: infrastructure.authenticate,
+    optionalAuthenticate: infrastructure.optionalAuthenticate,
+    tenantContext: infrastructure.tenantContext,
+    requireOrigin: infrastructure.requireOrigin,
+    userRateLimit: infrastructure.userRateLimit,
   });
 }

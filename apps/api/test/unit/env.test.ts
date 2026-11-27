@@ -7,6 +7,8 @@ const DATABASE_RUNTIME_URL =
 const JWT_ACCESS_SECRET = 'production-jwt-secret-at-least-32-characters';
 const REFRESH_TOKEN_PEPPER = 'production-refresh-pepper-at-least-32-chars';
 const PASSWORD_RESET_TOKEN_PEPPER = 'production-reset-pepper-at-least-32-chars';
+const INVITATION_TOKEN_PEPPER = 'production-invitation-pepper-at-least-32-chars';
+const API_KEY_PEPPER = 'production-api-key-pepper-at-least-32-chars';
 const CORS_ALLOWED_ORIGINS = 'https://app.eventpulse.example';
 const REDIS_URL = 'redis://localhost:6379';
 
@@ -15,6 +17,8 @@ const productionAuthEnv = {
   JWT_ACCESS_SECRET,
   REFRESH_TOKEN_PEPPER,
   PASSWORD_RESET_TOKEN_PEPPER,
+  INVITATION_TOKEN_PEPPER,
+  API_KEY_PEPPER,
   CORS_ALLOWED_ORIGINS,
   REDIS_URL,
 };
@@ -27,6 +31,8 @@ const defaultAuthConfig = {
   JWT_KEY_ID: 'primary',
   REFRESH_TOKEN_PEPPER: 'development-only-refresh-pepper-change-before-production',
   PASSWORD_RESET_TOKEN_PEPPER: 'development-only-reset-pepper-change-before-production',
+  INVITATION_TOKEN_PEPPER: 'development-only-invitation-pepper-change-before-production',
+  API_KEY_PEPPER: 'development-only-api-key-pepper-change-before-production',
   REFRESH_SLIDING_TTL_SECONDS: 604_800,
   SESSION_ABSOLUTE_TTL_SECONDS: 2_592_000,
   PASSWORD_RESET_TTL_SECONDS: 1_800,
@@ -43,6 +49,8 @@ const defaultAuthConfig = {
   AUTH_LOCKOUT_BASE_SECONDS: 60,
   AUTH_LOCKOUT_MAX_SECONDS: 86_400,
   AUTH_RATE_LIMIT_FAIL_CLOSED: true,
+  INVITATION_ACCEPT_MAX_ATTEMPTS: 20,
+  INVITATION_ACCEPT_WINDOW_SECONDS: 900,
 } as const;
 
 describe('parseEnv', () => {
@@ -67,6 +75,8 @@ describe('parseEnv', () => {
       JWT_ACCESS_SECRET,
       REFRESH_TOKEN_PEPPER,
       PASSWORD_RESET_TOKEN_PEPPER,
+      INVITATION_TOKEN_PEPPER,
+      API_KEY_PEPPER,
       CORS_ALLOWED_ORIGINS,
       REDIS_URL,
       AUTH_COOKIE_SECURE: true,
@@ -171,6 +181,8 @@ describe('parseEnv', () => {
       'JWT_ACCESS_SECRET',
       'REFRESH_TOKEN_PEPPER',
       'PASSWORD_RESET_TOKEN_PEPPER',
+      'INVITATION_TOKEN_PEPPER',
+      'API_KEY_PEPPER',
     ] as const) {
       const withoutSecret: Record<string, string | undefined> = { ...base };
       delete withoutSecret[name];

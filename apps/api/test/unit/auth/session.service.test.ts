@@ -58,13 +58,21 @@ function createUnitOfWorkMock() {
   };
 }
 
+function createMembershipGuard(active = true) {
+  return {
+    lockActiveMembership: vi.fn().mockResolvedValue(active),
+  };
+}
+
 function createService(
   repository: ReturnType<typeof createRepositoryMock>,
   slidingTtlSeconds = 7 * 24 * 60 * 60,
   absoluteTtlSeconds = 30 * 24 * 60 * 60,
+  membershipGuard = createMembershipGuard(),
 ): SessionService {
   return new SessionService({
     sessions: repository as unknown as SessionRepository,
+    memberships: membershipGuard,
     tokens,
     unitOfWork: createUnitOfWorkMock() as never,
     clock: { now: () => NOW },
@@ -109,6 +117,24 @@ describe('SessionService', () => {
     });
     expect(created?.refreshTokenHash).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(created?.familyId).not.toBe(created?.refreshTokenHash);
+  });
+
+  it('refuses to create a session when the membership is not ACTIVE at lock time', async () => {
+    const guard = createMembershipGuard(false);
+    const service = createService(repository, undefined, undefined, guard);
+
+    await expect(
+      service.create({
+        userId: USER_ID,
+        organizationId: ORG_ID,
+        ipAddress: null,
+        userAgent: null,
+      }),
+    ).rejects.toMatchObject({ statusCode: 403, code: 'AUTH_NO_ACTIVE_MEMBERSHIP' });
+
+    expect(guard.lockActiveMembership).toHaveBeenCalledWith(USER_ID, ORG_ID, { tx: true });
+    expect(repository.lockUser).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
   });
 
   it('caps expiry at the absolute deadline when sliding is longer', async () => {
@@ -202,6 +228,23 @@ describe('SessionService', () => {
     expect(repository.setReplacement).toHaveBeenCalledWith(current.id, 'new-session', {
       tx: true,
     });
+  });
+
+  it('refuses to rotate when the membership is no longer ACTIVE', async () => {
+    const guard = createMembershipGuard(false);
+    const service = createService(repository, undefined, undefined, guard);
+
+    await expect(
+      service.rotate({
+        session: createSession(),
+        organizationId: ORG_ID,
+        ipAddress: null,
+        userAgent: null,
+      }),
+    ).rejects.toMatchObject({ statusCode: 403, code: 'AUTH_NO_ACTIVE_MEMBERSHIP' });
+
+    expect(repository.claimRotation).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
   });
 
   it('does not record a replacement when creating the rotated session fails', async () => {

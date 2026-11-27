@@ -92,7 +92,7 @@
 | Epic | Stories Must | Écrans / parcours | Statut |
 |---|---|---|---|
 | AUTH | US-AUTH-01 à 04 | Login, sélection d'organisation, parcours 4.1 | Couvert |
-| ORG | US-ORG-01 à 06 | Users & Roles, Organization Settings, Audit, parcours 4.9 | Couvert |
+| ORG | US-ORG-01 à 07 | Users & Roles, Organization Settings, Audit, parcours 4.9 | Couvert |
 | EVT | US-EVT-01 à 08 | Events, Create/Edit, Event Details, parcours 4.2 | Couvert |
 | PAR | US-PAR-01 à 04 | Participants, Participant Details, parcours 4.3 | Couvert |
 | REG / TIC | US-REG-01/02, US-TIC-01 | Registrations, parcours 4.3 | Couvert |

@@ -128,6 +128,7 @@ Points de contrôle :
 - **Détection de réutilisation :** si un token déjà révoqué est présenté, toute la famille (`familyId`) est révoquée et l'événement est audité `FAILURE`.
 - Un changement d'organisation crée un nouveau couple de jetons dans la même famille et révoque l'ancien.
 - La déconnexion révoque la session courante ; `logout-all` révoque toutes les sessions de l'utilisateur.
+- La désactivation d'un membership révoque toutes les sessions de l'utilisateur **dans cette organisation** dans la **même transaction** que la mise à jour du statut. Un échec de révocation annule la désactivation. La création et la rotation de session verrouillent l'organisation (`FOR KEY SHARE`) puis la membership (`FOR UPDATE`) avant d'émettre le jeton : une désactivation ou un login concurrent ne peut donc pas laisser de session active après le commit. L'ancien access token échoue (`401 AUTH_SESSION_REVOKED`) et l'ancien refresh token ne peut plus créer de session. Si l'écriture d'audit échoue, la désactivation reste effective.
 - L'expiration effective est `MIN(now + REFRESH_SLIDING_TTL_SECONDS, sessions.absolute_expires_at)`, avec un plafond absolu `SESSION_ABSOLUTE_TTL_SECONDS` (30 jours par défaut) : le refresh ne peut jamais prolonger une session au-delà.
 - Le nombre de sessions actives par utilisateur est borné ; les plus anciennes sont révoquées.
 - Deux refresh concurrents avec le même jeton ne produisent qu'un succès. Le perdant est traité comme un rejeu et révoque toute la famille, y compris la session gagnante. La protection est conservée telle quelle ; le frontend devra sérialiser ses refresh (single-flight). Ce compromis sécurité/UX est documenté et testé côté backend.
@@ -147,11 +148,17 @@ Points de contrôle :
 
 ### 2.5 Invitations
 
-- Token haché, expiration 7 jours, usage unique.
-- Une invitation acceptée crée un membership `ACTIVE` et journalise l'action.
+- Token aléatoire 256 bits remis uniquement par email, expiration 7 jours, usage unique. La base ne stocke que son hash HMAC avec `INVITATION_TOKEN_PEPPER` ; aucune journalisation du token brut.
 - Une invitation en attente est unique par couple `(organisation, email)`.
 - Un ADMIN ne peut pas inviter avec le rôle OWNER.
-- L'acceptation vérifie que l'email du compte correspond à l'invitation.
+- **Preuve d'email limitée à l'invitation :** le token public (`POST /invitations/accept-token`) prouve la possession de l'adresse pour cette invitation et cette organisation seulement. Aucun flag global `emailVerified` n'est créé ou modifié, et le flux ne permet pas de changer l'email d'un compte existant. Le flux authentifié (`POST /invitations/accept`) vérifie en plus une correspondance stricte entre l'email du compte et celui de l'invitation.
+- **Atomicité :** pour le flux public, le compte (si nouveau), le membership, la consommation de l'invitation, la session et `last_login_at` sont écrits dans une seule transaction. Aucune session sans `organization_id` n'est créée ; l'organisation provient exclusivement de l'invitation, jamais du client.
+- **Ordre de verrouillage :** l'invitation est d'abord lue sans verrou pour découvrir l'organisation, puis l'organisation est verrouillée (`SELECT ... FOR UPDATE`) avant la ligne d'invitation (`SELECT ... FOR UPDATE`). Cet ordre `organisation → invitation` est partagé avec la création et la révocation, ce qui évite toute inversion de verrous et sérialise une acceptation avec une révocation/désactivation concurrente.
+- **Trois cas :** nouvel email → compte + membership + session ; compte existant sans membership → compte réutilisé, **mot de passe jamais modifié**, membership + session ; compte déjà membre actif avec le rôle invité → token consommé et session émise sans doublon ; rôle/statut incompatible → aucune consommation, aucune session, `409 MEMBERSHIP_ALREADY_EXISTS`. Le flux authentifié applique la même politique pour un membre actif de même rôle (token consommé, aucun nouveau membership), et retourne le même `409` sans consommer le token si rôle ou statut diffère.
+- **Rejeu et concurrence :** le statut `PENDING`, l'expiration et la consommation sont verrouillés (`SELECT ... FOR UPDATE`) puis revérifiés dans la transaction. Deux acceptations simultanées du même token produisent un seul succès ; un rejeu retourne `400 INVITATION_INVALID`. Deux invitations simultanées pour le même email dans deux organisations convergent vers un seul compte, grâce à `INSERT ... ON CONFLICT` qui ne touche jamais un hash existant.
+- **Anti-énumération :** token inconnu, expiré, révoqué, déjà accepté et compte inactif partagent le même code public ; la route est rate-limitée par IP (20 / 15 min par défaut, configurable) avant toute logique métier. Des tests HTTP exercent le middleware réel (seuil, `429`, `503 AUTH_REDIS_UNAVAILABLE` en fail-closed).
+- **Livraison :** si l'envoi échoue, l'invitation est révoquée (3 tentatives) et la requête retourne `503 INVITATION_DELIVERY_FAILED`. Si les tentatives échouent, un log `INVITATION_REVOCATION_FAILED` marque `requiresManualRevocation: true`, sans token ni email. Limite résiduelle documentée : un arrêt du processus entre l'échec d'envoi et la révocation peut laisser une invitation `PENDING` ; aucune outbox/queue n'a été introduite pour ce point. La révocation manuelle reste possible par OWNER/ADMIN.
+- L'acceptation journalise `INVITATION_ACCEPTED` (rôle, `accountCreated`) sans token ni secret ; l'audit est best-effort.
 
 ---
 
@@ -339,6 +346,7 @@ Le refresh token étant un cookie, `/auth/refresh` vérifie l'origine et ne reto
 | `POST /auth/password/forgot` | 5 / heure / IP et 5 / heure / compte |
 | `POST /auth/refresh` | 60 / heure / session |
 | Routes utilisateur | 300 / min / utilisateur |
+| `POST /invitations/accept-token` | 20 / 15 min / IP (public) |
 | Verrouillage progressif | seuil 5 échecs, 60 s puis doublement, plafond 24 h, portée compte + IP |
 | API ingestion | 60 / min / clé |
 | Création d'export | 10 / heure / utilisateur |
@@ -374,11 +382,12 @@ L'écriture d'audit d'authentification est best-effort et ne bloque pas la répo
 |---|---|
 | Format | Préfixe lisible + secret aléatoire 256 bits |
 | Stockage | Hash SHA-256 avec pepper serveur |
-| Affichage | Une seule fois, à la création |
-| Scope | `ingestion:write` uniquement ; contrôle applicatif requis pour refuser `{}` et les doublons, acceptés par le `CHECK` SQL |
-| Expiration | Optionnelle |
-| Révocation | Immédiate |
-| Traçabilité | `last_used_at`, audit de création/révocation |
+| Affichage | Une seule fois, à la création ou à la rotation |
+| Scope | `ingestion:write` uniquement ; contrôle applicatif requis pour refuser `{}` et les doublons, acceptés par le `CHECK` SQL. La rotation conserve les scopes |
+| Expiration | Optionnelle, date future stricte ; une clé expirée n'est plus validée |
+| Révocation | Immédiate et conditionnelle (`status = ACTIVE`) |
+| Rotation | Atomique : verrou de l'ancienne clé, révocation, création de la nouvelle avec les mêmes scopes ; l'ancien secret est invalide dès le commit et deux rotations concurrentes n'en laissent qu'une aboutir |
+| Traçabilité | `last_used_at`, audit de création/révocation/rotation ; jamais de hash ni de secret |
 | Rate limit | Dédié |
 
 Une clé compromise ne donne accès ni à la lecture, ni aux exports, ni à l'administration.
@@ -426,6 +435,8 @@ Règles :
 - Métadonnées ≤ 8 Ko, sans secret ni PII brute.
 - Consultation réservée OWNER/ADMIN.
 - Aucune modification ni suppression via API.
+- Écriture best-effort pour les opérations d'administration : un échec du journal n'annule ni la mise à jour d'organisation, ni celle d'un membership, ni la création/révocation/rotation d'une clé API, ni l'acceptation d'une invitation. L'échec est journalisé via des champs nettoyés (`errorName`, `errorCode`, `statusCode`) ; le message brut et la stack ne sont jamais émis sur ces chemins sensibles.
+- Limite assumée : sans Outbox, une panne durable de la base d'audit peut faire perdre l'événement ; la réponse métier reste cohérente et aucune donnée secrète n'est journalisée en compensation.
 
 ### 8.3 Événements audités
 

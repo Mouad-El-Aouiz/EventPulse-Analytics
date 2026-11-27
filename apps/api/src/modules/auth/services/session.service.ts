@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { Session } from '@prisma/client';
+import type { Prisma, Session } from '@prisma/client';
+import type { MembershipSessionGuard } from '../../../shared/contracts/membership-session-guard.js';
 import type { Clock } from '../../../shared/ports/clock.port.js';
+import { noActiveMembershipError } from '../auth.errors.js';
 import type { PrismaAuthUnitOfWork } from '../repositories/auth-unit-of-work.js';
 import type { SessionRepository } from '../repositories/session.repository.js';
 import { hashTokenWithPepper } from './token-hash.js';
@@ -10,6 +12,7 @@ export const MAX_ACTIVE_SESSIONS_PER_USER = 20;
 
 export interface SessionServiceOptions {
   sessions: SessionRepository;
+  memberships: MembershipSessionGuard;
   tokens: TokenService;
   unitOfWork: PrismaAuthUnitOfWork;
   clock: Clock;
@@ -64,35 +67,53 @@ export class SessionService {
   }
 
   async create(input: CreateSessionInput): Promise<IssuedSession> {
+    return this.options.unitOfWork.run((tx) => this.createWithinTransaction(tx, input));
+  }
+
+  /**
+   * Issues a session using the caller's transaction so that invitation
+   * onboarding can commit account, membership, invitation, and session together.
+   */
+  async createWithinTransaction(
+    tx: Prisma.TransactionClient,
+    input: CreateSessionInput,
+  ): Promise<IssuedSession> {
     const now = this.options.clock.now();
     const refreshToken = this.options.tokens.generateOpaqueToken();
     const absoluteExpiresAt = new Date(now.getTime() + this.options.absoluteTtlSeconds * 1000);
 
-    const session = await this.options.unitOfWork.run(async (tx) => {
-      // Serialize session creation per user so the active-session cap stays
-      // strict even under concurrent logins.
-      await this.options.sessions.lockUser(input.userId, tx);
-      await this.options.sessions.revokeExcessActiveForUser(
-        input.userId,
-        MAX_ACTIVE_SESSIONS_PER_USER - 1,
-        now,
-        tx,
-      );
+    // Lock the membership before the session cap and session row so a
+    // concurrent deactivation serializes with session issuance instead of
+    // letting a stale ACTIVE snapshot create a session after revocation.
+    if (
+      !(await this.options.memberships.lockActiveMembership(input.userId, input.organizationId, tx))
+    ) {
+      throw noActiveMembershipError();
+    }
 
-      return this.options.sessions.create(
-        {
-          userId: input.userId,
-          organizationId: input.organizationId,
-          familyId: randomUUID(),
-          refreshTokenHash: hashTokenWithPepper(refreshToken, this.options.refreshPepper),
-          expiresAt: this.expiry(now, absoluteExpiresAt),
-          absoluteExpiresAt,
-          ipAddress: input.ipAddress,
-          userAgent: input.userAgent,
-        },
-        tx,
-      );
-    });
+    // Serialize session creation per user so the active-session cap stays
+    // strict even under concurrent logins.
+    await this.options.sessions.lockUser(input.userId, tx);
+    await this.options.sessions.revokeExcessActiveForUser(
+      input.userId,
+      MAX_ACTIVE_SESSIONS_PER_USER - 1,
+      now,
+      tx,
+    );
+
+    const session = await this.options.sessions.create(
+      {
+        userId: input.userId,
+        organizationId: input.organizationId,
+        familyId: randomUUID(),
+        refreshTokenHash: hashTokenWithPepper(refreshToken, this.options.refreshPepper),
+        expiresAt: this.expiry(now, absoluteExpiresAt),
+        absoluteExpiresAt,
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+      },
+      tx,
+    );
 
     return { session, refreshToken };
   }
@@ -103,6 +124,18 @@ export class SessionService {
     const refreshTokenHash = hashTokenWithPepper(refreshToken, this.options.refreshPepper);
 
     const session = await this.options.unitOfWork.run(async (tx) => {
+      // Deactivation locks the membership row before revoking sessions; taking
+      // the same lock here prevents a refresh from racing past deactivation.
+      if (
+        !(await this.options.memberships.lockActiveMembership(
+          input.session.userId,
+          input.organizationId,
+          tx,
+        ))
+      ) {
+        throw noActiveMembershipError();
+      }
+
       const claimed = await this.options.sessions.claimRotation(
         input.session.id,
         input.session.refreshTokenHash,

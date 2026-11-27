@@ -19,4 +19,8 @@ export class NullMailPort implements MailPort {
   async sendPasswordReset(): Promise<void> {
     await this.assertAvailable();
   }
+
+  async sendOrganizationInvitation(): Promise<void> {
+    await this.assertAvailable();
+  }
 }

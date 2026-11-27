@@ -10,6 +10,8 @@ export const MAX_DATABASE_POOL_SIZE = 100;
 const DEVELOPMENT_JWT_SECRET = 'development-only-jwt-secret-change-before-production';
 const DEVELOPMENT_REFRESH_PEPPER = 'development-only-refresh-pepper-change-before-production';
 const DEVELOPMENT_RESET_PEPPER = 'development-only-reset-pepper-change-before-production';
+const DEVELOPMENT_INVITATION_PEPPER = 'development-only-invitation-pepper-change-before-production';
+const DEVELOPMENT_API_KEY_PEPPER = 'development-only-api-key-pepper-change-before-production';
 const DEVELOPMENT_CORS_ORIGINS = 'http://localhost:5173';
 
 function isUrlWithProtocols(value: string, protocols: ReadonlySet<string>): boolean {
@@ -101,6 +103,8 @@ export const envSchema = z
 
     REFRESH_TOKEN_PEPPER: secretSchema,
     PASSWORD_RESET_TOKEN_PEPPER: secretSchema,
+    INVITATION_TOKEN_PEPPER: secretSchema,
+    API_KEY_PEPPER: secretSchema,
     REFRESH_SLIDING_TTL_SECONDS: z.coerce
       .number()
       .int()
@@ -145,6 +149,8 @@ export const envSchema = z
     AUTH_FORGOT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
     AUTH_REFRESH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(1000).default(60),
     AUTH_REFRESH_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+    INVITATION_ACCEPT_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(20),
+    INVITATION_ACCEPT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(900),
     AUTH_LOCKOUT_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
     AUTH_LOCKOUT_BASE_SECONDS: z.coerce.number().int().min(1).max(86_400).default(60),
     AUTH_LOCKOUT_MAX_SECONDS: z.coerce
@@ -169,6 +175,8 @@ export const envSchema = z
         'JWT_ACCESS_SECRET',
         'REFRESH_TOKEN_PEPPER',
         'PASSWORD_RESET_TOKEN_PEPPER',
+        'INVITATION_TOKEN_PEPPER',
+        'API_KEY_PEPPER',
       ] as const;
 
       for (const name of requiredSecrets) {
@@ -184,7 +192,9 @@ export const envSchema = z
       if (
         value.JWT_ACCESS_SECRET === DEVELOPMENT_JWT_SECRET ||
         value.REFRESH_TOKEN_PEPPER === DEVELOPMENT_REFRESH_PEPPER ||
-        value.PASSWORD_RESET_TOKEN_PEPPER === DEVELOPMENT_RESET_PEPPER
+        value.PASSWORD_RESET_TOKEN_PEPPER === DEVELOPMENT_RESET_PEPPER ||
+        value.INVITATION_TOKEN_PEPPER === DEVELOPMENT_INVITATION_PEPPER ||
+        value.API_KEY_PEPPER === DEVELOPMENT_API_KEY_PEPPER
       ) {
         ctx.addIssue({
           code: 'custom',
@@ -280,6 +290,8 @@ export const envSchema = z
       JWT_ACCESS_SECRET: value.JWT_ACCESS_SECRET ?? DEVELOPMENT_JWT_SECRET,
       REFRESH_TOKEN_PEPPER: value.REFRESH_TOKEN_PEPPER ?? DEVELOPMENT_REFRESH_PEPPER,
       PASSWORD_RESET_TOKEN_PEPPER: value.PASSWORD_RESET_TOKEN_PEPPER ?? DEVELOPMENT_RESET_PEPPER,
+      INVITATION_TOKEN_PEPPER: value.INVITATION_TOKEN_PEPPER ?? DEVELOPMENT_INVITATION_PEPPER,
+      API_KEY_PEPPER: value.API_KEY_PEPPER ?? DEVELOPMENT_API_KEY_PEPPER,
       CORS_ALLOWED_ORIGINS: value.CORS_ALLOWED_ORIGINS ?? DEVELOPMENT_CORS_ORIGINS,
       AUTH_COOKIE_SECURE: value.AUTH_COOKIE_SECURE ?? nodeEnv === 'production',
     };

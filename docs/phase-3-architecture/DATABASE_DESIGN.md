@@ -377,7 +377,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 
 **Contraintes :** `UNIQUE (organization_id, user_id)` ; `UNIQUE (organization_id, id)` pour les FK composites.
 **Index :** `(user_id, status)` ; `(organization_id, role, status)`.
-**Règles :** un seul rôle par membership ; le dernier OWNER actif est protégé par transaction applicative.
+**Règles :** un seul rôle par membership ; le dernier OWNER actif est protégé par transaction applicative et verrou d'organisation. La désactivation (`status = DISABLED`, `disabled_at`) révoque les sessions de l'utilisateur pour cette organisation dans la **même transaction** ; cette conséquence reste applicative, pas un trigger SQL. La création/rotation de session verrouille l'organisation (`FOR KEY SHARE`, cohérent avec la FK `sessions.organization_id`) puis la ligne de membership (`FOR UPDATE` avant le verrou utilisateur et l'insertion de session) : une désactivation concurrente et une émission de session ne peuvent pas s'entrelacer pour laisser une session active. Aucune colonne de version ni migration n'est nécessaire, le verrouillage suffit.
 
 ### 4.6 `invitations`
 
@@ -396,7 +396,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `created_at` | timestamptz(3) | NN | Défaut `now()` |
 
 **Index :** unique `token_hash` ; index partiel unique `(organization_id, email) WHERE status = 'PENDING'` ; `(organization_id, status, created_at)`.
-**Règles :** une invitation acceptée crée le membership ; un ADMIN ne peut pas inviter un OWNER.
+**Règles :** le token est stocké uniquement sous forme de hash HMAC et sert de preuve d'email limitée à cette invitation ; il n'existe pas de colonne `email_verified` globale. Une invitation `PENDING` est consommée exactement une fois (`status = ACCEPTED`) dans la transaction qui crée ou réutilise le compte, crée le membership si nécessaire et émet la session. Les acceptations verrouillent l'organisation (`FOR UPDATE`) **avant** la ligne d'invitation (`FOR UPDATE`), le même ordre que la création/révocation : la course acceptation/révocation est sérialisée sans inversion de verrous. Un membership existant incompatible (statut ou rôle différent) ne consomme pas l'invitation ; un membre déjà actif avec le rôle invité consomme le token de façon idempotente, sans doublon de membership (même politique pour les flux public et authentifié). L'unicité partielle `(organization_id, email) WHERE status = 'PENDING'` et le verrou de ligne sur `token_hash` protègent les acceptations concurrentes. Un ADMIN ne peut pas inviter un OWNER.
 
 ### 4.7 `api_keys`
 
@@ -417,7 +417,7 @@ Légende : `NN` = NOT NULL, `N` = NULL autorisé, `PK` = clé primaire, `FK` = c
 | `updated_at` | timestamptz(3) | NN | Mise à jour applicative |
 
 **Index :** unique `key_hash` ; `(organization_id, status)`.
-**Règles :** le secret n'est jamais stocké ni journalisé ; seul le hash et le préfixe sont conservés.
+**Règles :** le secret n'est jamais stocké ni journalisé ; seul le hash et le préfixe sont conservés. `expires_at` est optionnel mais doit être strictement futur à la création/rotation ; une clé dont `expires_at <= now()` n'est plus valide. La rotation révoque l'ancienne ligne (`status = REVOKED`, `revoked_at`) et insère une nouvelle ligne dans la même transaction, en conservant `scopes` et, par défaut, `name`/`expires_at`.
 
 ### 4.8 `events`
 

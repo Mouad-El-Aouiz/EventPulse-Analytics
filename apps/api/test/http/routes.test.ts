@@ -29,7 +29,7 @@ describe('API versioning', () => {
     const app = createTestApp();
 
     const response = await request(app)
-      .get('/api/v1/events')
+      .get('/api/v1/unknown-resource')
       .set('X-Request-Id', 'versioned-route-id');
 
     expect(response.status).toBe(404);
@@ -40,7 +40,7 @@ describe('API versioning', () => {
       title: 'Not Found',
       status: 404,
       detail: 'The requested resource was not found.',
-      instance: '/api/v1/events',
+      instance: '/api/v1/unknown-resource',
       code: 'ROUTE_NOT_FOUND',
       requestId: 'versioned-route-id',
     });

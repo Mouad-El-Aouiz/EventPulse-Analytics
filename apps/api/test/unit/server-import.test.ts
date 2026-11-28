@@ -12,5 +12,6 @@ describe('server module import', () => {
     expect(process.listenerCount('SIGTERM')).toBe(sigtermListeners);
     expect(process.listenerCount('SIGINT')).toBe(sigintListeners);
     expect(process.exitCode).toBe(exitCode);
-  });
+    // Coverage instrumentation makes loading the full server module graph exceed the default 5s.
+  }, 20_000);
 });

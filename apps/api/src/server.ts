@@ -6,7 +6,7 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger as defaultLogger } from './config/logger.js';
 import { createPrismaDatabase, type DatabaseLifecycle } from './database/prisma.js';
-import { errorLogFields } from './errors/error-logging.js';
+import { errorLogFields, sanitizedErrorFields } from './errors/error-logging.js';
 import { flushAuthAudits } from './modules/auth/auth.module.js';
 import type { AuditFlushResult } from './modules/auth/auth.service.js';
 import { getPasswordResetEmailStatus } from './shared/mail/mail-status.js';
@@ -142,7 +142,9 @@ async function flushAuditTrail(
       logger.warn({ port, pending: result.pending, timeoutMs }, AUDIT_FLUSH_TIMED_OUT_MESSAGE);
     }
   } catch (error) {
-    logger.error({ ...errorLogFields(error), port }, AUDIT_FLUSH_FAILED_MESSAGE);
+    // Audit failures are security-sensitive: never emit raw DB messages that may
+    // embed connection strings or tokens.
+    logger.error({ ...sanitizedErrorFields(error), port }, AUDIT_FLUSH_FAILED_MESSAGE);
   }
 }
 

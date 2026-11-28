@@ -4,7 +4,7 @@ import type {
   ActiveMembership,
   OrganizationsReader,
 } from '../../shared/contracts/organizations-reader.js';
-import { errorLogFields } from '../../errors/error-logging.js';
+import { sanitizedErrorFields } from '../../errors/error-logging.js';
 import type { AuditEvent, AuditPort } from '../../shared/ports/audit.port.js';
 import type { Clock } from '../../shared/ports/clock.port.js';
 import type { RateLimiter } from '../../shared/rate-limit/rate-limiter.js';
@@ -133,7 +133,7 @@ export class AuthService {
       await this.options.audit.record(event);
     } catch (error) {
       this.options.logger.warn(
-        { ...errorLogFields(error), actionType: event.actionType },
+        { ...sanitizedErrorFields(error), actionType: event.actionType },
         'Auth audit write failed',
       );
     }
@@ -141,7 +141,10 @@ export class AuthService {
 
   private scheduleAudit(task: Promise<void>, actionType: string): void {
     const guarded = task.catch((error: unknown) => {
-      this.options.logger.warn({ ...errorLogFields(error), actionType }, 'Auth audit write failed');
+      this.options.logger.warn(
+        { ...sanitizedErrorFields(error), actionType },
+        'Auth audit write failed',
+      );
     });
 
     this.pendingAudits.add(guarded);
@@ -286,7 +289,7 @@ export class AuthService {
         await this.options.sessions.revokeCurrent(session.id, this.options.clock.now());
       } catch (revokeError) {
         this.options.logger.error(
-          errorLogFields(revokeError),
+          sanitizedErrorFields(revokeError),
           'Failed to revoke session after access-token signing failure',
         );
       }
@@ -407,7 +410,7 @@ export class AuthService {
         await this.options.sessions.revokeCurrent(issued.session.id, this.options.clock.now());
       } catch (revokeError) {
         this.options.logger.error(
-          errorLogFields(revokeError),
+          sanitizedErrorFields(revokeError),
           'Failed to revoke session after login finalization failure',
         );
       }
@@ -835,7 +838,7 @@ export class AuthService {
       // Mail availability and delivery failures must not reveal whether the
       // account exists. The caller always returns the same 204 response.
       this.options.logger.warn(
-        { ...errorLogFields(error), actionType: 'AUTH_PASSWORD_RESET_REQUESTED' },
+        { ...sanitizedErrorFields(error), actionType: 'AUTH_PASSWORD_RESET_REQUESTED' },
         'Password reset delivery failed',
       );
       return;

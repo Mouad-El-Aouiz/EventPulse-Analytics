@@ -399,7 +399,7 @@ describe('not found handling', () => {
     const { app, entries } = createTestContext();
 
     const response = await request(app)
-      .get('/api/v1/events?token=query-secret&email=user@example.com')
+      .get('/api/v1/unknown-resource?token=query-secret&email=user@example.com')
       .set('X-Request-Id', 'not-found-id');
 
     expect(response.status).toBe(404);
@@ -410,7 +410,7 @@ describe('not found handling', () => {
       status: 404,
       code: 'ROUTE_NOT_FOUND',
       detail: 'The requested resource was not found.',
-      instance: '/api/v1/events',
+      instance: '/api/v1/unknown-resource',
       requestId: 'not-found-id',
     });
     expect(response.body.instance).not.toContain('?');
@@ -424,7 +424,7 @@ describe('not found handling', () => {
     expect(failed.level).toBe('warn');
     expect(failed.errorCode).toBe('ROUTE_NOT_FOUND');
     expect(failed.statusCode).toBe(404);
-    expect(failed.path).toBe('/api/v1/events');
+    expect(failed.path).toBe('/api/v1/unknown-resource');
     expect(failed.requestId).toBe('not-found-id');
     expect(serializedLogs).not.toContain('query-secret');
     expect(serializedLogs).not.toContain('user@example.com');

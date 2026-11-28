@@ -71,3 +71,244 @@ describe.each([
     expect(users.findById).not.toHaveBeenCalled();
   });
 });
+
+interface SessionOverrides {
+  id?: string;
+  userId?: string;
+  organizationId?: string | null;
+  revokedAt?: Date | null;
+  expiresAt?: Date;
+  absoluteExpiresAt?: Date;
+}
+
+function requestWith(authorization: string | undefined): Request {
+  return { get: vi.fn().mockReturnValue(authorization) } as unknown as Request;
+}
+
+function statefulDependencies(
+  options: {
+    session?: SessionOverrides | null;
+    user?: { isActive: boolean } | null;
+    verify?: () => Promise<AuthContext>;
+  } = {},
+) {
+  const tokens = {
+    verifyAccessToken: vi.fn(options.verify ?? (async () => CONTEXT)),
+  };
+  const sessions = {
+    findById: vi.fn(async () =>
+      options.session === null
+        ? null
+        : {
+            id: CONTEXT.sessionId,
+            userId: CONTEXT.userId,
+            organizationId: CONTEXT.organizationId,
+            revokedAt: null,
+            expiresAt: new Date(NOW.getTime() + 86_400_000),
+            absoluteExpiresAt: new Date(NOW.getTime() + 30 * 86_400_000),
+            ...(options.session ?? {}),
+          },
+    ),
+  };
+  const users = {
+    findById: vi.fn(async () => (options.user === undefined ? { isActive: true } : options.user)),
+  };
+
+  return {
+    tokens,
+    sessions,
+    users,
+    dependencies: {
+      tokens: tokens as unknown as TokenService,
+      sessions: sessions as unknown as SessionRepository,
+      users: users as unknown as UserRepository,
+      clock: { now: () => NOW } as Clock,
+    },
+  };
+}
+
+function expectedError(next: ReturnType<typeof vi.fn>): unknown {
+  expect(next).toHaveBeenCalledTimes(1);
+
+  return next.mock.calls[0]?.[0];
+}
+
+describe('required authentication matrix', () => {
+  it('rejects a missing Authorization header', async () => {
+    const { dependencies, tokens } = statefulDependencies();
+    const request = requestWith(undefined);
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(request, {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({
+      statusCode: 401,
+      code: 'AUTH_TOKEN_MISSING',
+    });
+    expect(tokens.verifyAccessToken).not.toHaveBeenCalled();
+    expect(request.auth).toBeUndefined();
+  });
+
+  it.each(['Basic abc', 'Bearer', 'Bearer ', 'bearer-token'])(
+    'rejects a malformed Authorization header: %s',
+    async (authorization) => {
+      const { dependencies } = statefulDependencies();
+      const next = vi.fn();
+
+      await createAuthenticateMiddleware(dependencies)(
+        requestWith(authorization),
+        {} as Response,
+        next,
+      );
+
+      expect(expectedError(next)).toMatchObject({
+        statusCode: 401,
+        code: 'AUTH_TOKEN_INVALID',
+      });
+    },
+  );
+
+  it('rejects a token whose user no longer matches the session', async () => {
+    const { dependencies } = statefulDependencies({
+      session: { userId: '99999999-9999-4999-8999-999999999999' },
+    });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({ code: 'AUTH_TOKEN_INVALID' });
+  });
+
+  it('rejects a token whose organization no longer matches the session', async () => {
+    const { dependencies } = statefulDependencies({
+      session: { organizationId: '99999999-9999-4999-8999-999999999999' },
+    });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({ code: 'AUTH_TOKEN_INVALID' });
+  });
+
+  it('rejects an unknown session as revoked', async () => {
+    const { dependencies } = statefulDependencies({ session: null });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({
+      statusCode: 401,
+      code: 'AUTH_SESSION_REVOKED',
+    });
+  });
+
+  it('rejects a revoked session', async () => {
+    const { dependencies } = statefulDependencies({
+      session: { revokedAt: NOW },
+    });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({
+      statusCode: 401,
+      code: 'AUTH_SESSION_REVOKED',
+    });
+  });
+
+  it('rejects an idle-expired session', async () => {
+    const { dependencies } = statefulDependencies({
+      session: { expiresAt: NOW },
+    });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({
+      statusCode: 401,
+      code: 'AUTH_SESSION_EXPIRED',
+    });
+  });
+
+  it('rejects an absolute-expired session', async () => {
+    const { dependencies } = statefulDependencies({
+      session: { absoluteExpiresAt: NOW },
+    });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({
+      statusCode: 401,
+      code: 'AUTH_SESSION_EXPIRED',
+    });
+  });
+
+  it('rejects a session whose user disappeared', async () => {
+    const { dependencies } = statefulDependencies({ user: null });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({ code: 'AUTH_TOKEN_INVALID' });
+  });
+
+  it('rejects a disabled account', async () => {
+    const { dependencies } = statefulDependencies({ user: { isActive: false } });
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({
+      statusCode: 403,
+      code: 'AUTH_ACCOUNT_DISABLED',
+    });
+  });
+
+  it('populates req.auth for a valid session', async () => {
+    const { dependencies } = statefulDependencies();
+    const request = createRequest();
+    const next = vi.fn();
+
+    await createAuthenticateMiddleware(dependencies)(request, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(request.auth).toEqual(CONTEXT);
+  });
+});
+
+describe('optional authentication', () => {
+  it('continues anonymously when the header is absent', async () => {
+    const { dependencies, tokens } = statefulDependencies();
+    const request = requestWith(undefined);
+    const next = vi.fn();
+
+    await createOptionalAuthenticateMiddleware(dependencies)(request, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(request.auth).toBeUndefined();
+    expect(tokens.verifyAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a revoked session when a token is present', async () => {
+    const { dependencies } = statefulDependencies({
+      session: { revokedAt: NOW },
+    });
+    const next = vi.fn();
+
+    await createOptionalAuthenticateMiddleware(dependencies)(createRequest(), {} as Response, next);
+
+    expect(expectedError(next)).toMatchObject({ code: 'AUTH_SESSION_REVOKED' });
+  });
+
+  it('populates req.auth for a valid token', async () => {
+    const { dependencies } = statefulDependencies();
+    const request = createRequest();
+    const next = vi.fn();
+
+    await createOptionalAuthenticateMiddleware(dependencies)(request, {} as Response, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(request.auth).toEqual(CONTEXT);
+  });
+});
